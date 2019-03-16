@@ -12,8 +12,24 @@ import tarfile
 
 from twisted.trial import unittest
 
-from deluge.common import (VersionSplit, archive_files, fdate, fpcnt, fpeer, fsize, fspeed, ftime, get_path_size,
-                           is_infohash, is_ip, is_ipv4, is_ipv6, is_magnet, is_url)
+from deluge.common import (
+    VersionSplit,
+    archive_files,
+    fdate,
+    fpcnt,
+    fpeer,
+    fsize,
+    fspeed,
+    ftime,
+    get_path_size,
+    is_infohash,
+    is_ip,
+    is_ipv4,
+    is_ipv6,
+    is_magnet,
+    is_url,
+    windows_check,
+)
 from deluge.ui.translations_util import setup_translations
 
 from .common import get_test_data_file, set_tmp_config_dir
@@ -53,15 +69,17 @@ class CommonTestCase(unittest.TestCase):
         self.assertTrue(fpeer(10, -1) == '10')
 
     def test_ftime(self):
-        self.assertTrue(ftime(0) == '')
-        self.assertTrue(ftime(5) == '5s')
-        self.assertTrue(ftime(100) == '1m 40s')
-        self.assertTrue(ftime(3789) == '1h 3m')
-        self.assertTrue(ftime(23011) == '6h 23m')
-        self.assertTrue(ftime(391187) == '4d 12h')
-        self.assertTrue(ftime(604800) == '1w 0d')
-        self.assertTrue(ftime(13893086) == '22w 6d')
-        self.assertTrue(ftime(59740269) == '1y 46w')
+        self.assertEqual(ftime(0), '')
+        self.assertEqual(ftime(5), '5s')
+        self.assertEqual(ftime(100), '1m 40s')
+        self.assertEqual(ftime(3789), '1h 3m')
+        self.assertEqual(ftime(23011), '6h 23m')
+        self.assertEqual(ftime(391187), '4d 12h')
+        self.assertEqual(ftime(604800), '1w 0d')
+        self.assertEqual(ftime(13893086), '22w 6d')
+        self.assertEqual(ftime(59740269), '1y 46w')
+        self.assertEqual(ftime(61.25), '1m 1s')
+        self.assertEqual(ftime(119.9), '1m 59s')
 
     def test_fdate(self):
         self.assertTrue(fdate(-1) == '')
@@ -71,12 +89,17 @@ class CommonTestCase(unittest.TestCase):
         self.assertFalse(is_url('file://test.torrent'))
 
     def test_is_magnet(self):
-        self.assertTrue(is_magnet('magnet:?xt=urn:btih:SU5225URMTUEQLDXQWRB2EQWN6KLTYKN'))
+        self.assertTrue(
+            is_magnet('magnet:?xt=urn:btih:SU5225URMTUEQLDXQWRB2EQWN6KLTYKN')
+        )
+        self.assertFalse(is_magnet(None))
 
     def test_is_infohash(self):
         self.assertTrue(is_infohash('2dc5d0e71a66fe69649a640d39cb00a259704973'))
 
     def test_get_path_size(self):
+        if windows_check():
+            raise unittest.SkipTest('os devnull is different on windows')
         self.assertTrue(get_path_size(os.devnull) == 0)
         self.assertTrue(get_path_size('non-existant.file') == -1)
 
@@ -99,10 +122,10 @@ class CommonTestCase(unittest.TestCase):
         self.assertTrue(VersionSplit('1.2.1') < VersionSplit('1.2.2'))
         self.assertTrue(VersionSplit('1.1.9') < VersionSplit('1.2.2'))
         self.assertTrue(VersionSplit('1.2.2') > VersionSplit('1.2.1'))
-        self.assertTrue(VersionSplit('1.2.2') < VersionSplit('1.2.2-dev'))
+        self.assertTrue(VersionSplit('1.2.2') > VersionSplit('1.2.2-dev0'))
         self.assertTrue(VersionSplit('1.2.2-dev') < VersionSplit('1.3.0-rc2'))
         self.assertTrue(VersionSplit('1.2.2') > VersionSplit('1.2.2-rc2'))
-        self.assertTrue(VersionSplit('1.2.2-rc2-dev') > VersionSplit('1.2.2-rc2'))
+        self.assertTrue(VersionSplit('1.2.2-rc2-dev') < VersionSplit('1.2.2-rc2'))
         self.assertTrue(VersionSplit('1.2.2-rc3') > VersionSplit('1.2.2-rc2'))
         self.assertTrue(VersionSplit('0.14.9') == VersionSplit('0.14.9'))
         self.assertTrue(VersionSplit('0.14.9') > VersionSplit('0.14.5'))
@@ -116,29 +139,64 @@ class CommonTestCase(unittest.TestCase):
 
     def test_parse_human_size(self):
         from deluge.common import parse_human_size
-        sizes = [('1', 1),
-                 ('10 bytes', 10),
-                 ('2048 bytes', 2048),
-                 ('1MiB', 2**(10 * 2)),
-                 ('1 MiB', 2**(10 * 2)),
-                 ('1 GiB', 2**(10 * 3)),
-                 ('1 GiB', 2**(10 * 3)),
-                 ('1M', 10**6),
-                 ('1MB', 10**6),
-                 ('1 GB', 10**9),
-                 ('1 TB', 10**12)]
+
+        sizes = [
+            ('1', 1),
+            ('10 bytes', 10),
+            ('2048 bytes', 2048),
+            ('1MiB', 2 ** (10 * 2)),
+            ('1 MiB', 2 ** (10 * 2)),
+            ('1 GiB', 2 ** (10 * 3)),
+            ('1 GiB', 2 ** (10 * 3)),
+            ('1M', 10 ** 6),
+            ('1MB', 10 ** 6),
+            ('1 GB', 10 ** 9),
+            ('1 TB', 10 ** 12),
+        ]
 
         for human_size, byte_size in sizes:
             parsed = parse_human_size(human_size)
-            self.assertEqual(parsed, byte_size, 'Mismatch when converting: %s' % human_size)
+            self.assertEqual(
+                parsed, byte_size, 'Mismatch when converting: %s' % human_size
+            )
 
     def test_archive_files(self):
         arc_filelist = [
             get_test_data_file('test.torrent'),
-            get_test_data_file('deluge.png')]
+            get_test_data_file('deluge.png'),
+        ]
         arc_filepath = archive_files('test-arc', arc_filelist)
 
         with tarfile.open(arc_filepath, 'r') as tar:
             for tar_info in tar:
                 self.assertTrue(tar_info.isfile())
-                self.assertTrue(tar_info.name in [os.path.basename(arcf) for arcf in arc_filelist])
+                self.assertTrue(
+                    tar_info.name in [os.path.basename(arcf) for arcf in arc_filelist]
+                )
+
+    def test_archive_files_missing(self):
+        """Archive exists even with file not found."""
+        filelist = ['test.torrent', 'deluge.png', 'missing.file']
+        arc_filepath = archive_files(
+            'test-arc', [get_test_data_file(f) for f in filelist]
+        )
+        filelist.remove('missing.file')
+
+        with tarfile.open(arc_filepath, 'r') as tar:
+            self.assertEqual(tar.getnames(), filelist)
+            self.assertTrue(all(tarinfo.isfile() for tarinfo in tar))
+
+    def test_archive_files_message(self):
+        filelist = ['test.torrent', 'deluge.png']
+        arc_filepath = archive_files(
+            'test-arc', [get_test_data_file(f) for f in filelist], message='test'
+        )
+
+        result_files = filelist + ['archive_message.txt']
+        with tarfile.open(arc_filepath, 'r') as tar:
+            self.assertEqual(tar.getnames(), result_files)
+            for tar_info in tar:
+                self.assertTrue(tar_info.isfile())
+                if tar_info.name == 'archive_message.txt':
+                    result = tar.extractfile(tar_info).read().decode()
+                    self.assertEqual(result, 'test')

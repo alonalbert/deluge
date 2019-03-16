@@ -31,8 +31,10 @@ def format_speed(speed):
 def format_time(time):
     if time > 0:
         return deluge.common.ftime(time)
-    else:
+    elif time == 0:
         return '-'
+    else:
+        return '∞'
 
 
 def format_date_dash(time):
@@ -96,8 +98,10 @@ def f_seedrank_dash(seed_rank, seeding_time):
 
 
 def ftotal_sized(first, second):
-    return '%s (%s)' % (deluge.common.fsize(first, shortform=True),
-                        deluge.common.fsize(second, shortform=True))
+    return '%s (%s)' % (
+        deluge.common.fsize(first, shortform=True),
+        deluge.common.fsize(second, shortform=True),
+    )
 
 
 def format_pieces(num, size):
@@ -140,7 +144,7 @@ def trim_string(string, w, have_dbls):
             chrs.append('.')
         return '%s ' % (''.join(chrs))
     else:
-        return '%s ' % (string[0:w - 1])
+        return '%s ' % (string[0 : w - 1])
 
 
 def format_column(col, lim):
@@ -159,7 +163,9 @@ def format_column(col, lim):
 
 
 def format_row(row, column_widths):
-    return ''.join([format_column(row[i], column_widths[i]) for i in range(0, len(row))])
+    return ''.join(
+        [format_column(row[i], column_widths[i]) for i in range(0, len(row))]
+    )
 
 
 _strip_re = re.compile(r'\{!.*?!\}')
@@ -181,7 +187,7 @@ def shorten_hash(tid, space_left, min_width=13, placeholder='...'):
     if space_left >= min_width:
         mid = len(tid) // 2
         trim, remain = divmod(len(tid) + len(placeholder) - space_left, 2)
-        return tid[0: mid - trim] + placeholder + tid[mid + trim + remain:]
+        return tid[0 : mid - trim] + placeholder + tid[mid + trim + remain :]
     else:
         # Justity the tid so it is completely on the next line.
         return tid.rjust(len(tid) + space_left)
@@ -216,7 +222,7 @@ def wrap_string(string, width, min_lines=0, strip_colors=True):
         m = _format_code.search(remove_formatting(s))
         if m:
             if m.group(1).startswith('indent:'):
-                indent = m.group(1)[len('indent:'):]
+                indent = m.group(1)[len('indent:') :]
             elif m.group(1).startswith('indent_pos:'):
                 begin = m.start(0)
                 indent = ' ' * begin
@@ -297,7 +303,7 @@ def strwidth(string):
     """
     Measure width of a string considering asian double width characters
     """
-    return sum([1 + (east_asian_width(char) in ['W', 'F']) for char in string])
+    return sum(1 + (east_asian_width(char) in ['W', 'F']) for char in string)
 
 
 def pad_string(string, length, character=' ', side='right'):

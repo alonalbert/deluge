@@ -15,6 +15,7 @@ from __future__ import unicode_literals
 
 import logging
 import os
+from binascii import hexlify
 from hashlib import sha1 as sha
 
 from deluge import bencode
@@ -45,103 +46,83 @@ STATE_TRANSLATION = {
 }
 
 TORRENT_DATA_FIELD = {
-    'queue':
-        {'name': '#', 'status': ['queue']},
-    'name':
-        {'name': _('Name'), 'status': ['state', 'name']},
-    'progress_state':
-        {'name': _('Progress'), 'status': ['progress', 'state']},
-    'state':
-        {'name': _('State'), 'status': ['state']},
-    'progress':
-        {'name': _('Progress'), 'status': ['progress']},
-    'size':
-        {'name': _('Size'), 'status': ['total_wanted']},
-    'downloaded':
-        {'name': _('Downloaded'), 'status': ['all_time_download']},
-    'uploaded':
-        {'name': _('Uploaded'), 'status': ['total_uploaded']},
-    'remaining':
-        {'name': _('Remaining'), 'status': ['total_remaining']},
-    'ratio':
-        {'name': _('Ratio'), 'status': ['ratio']},
-    'download_speed':
-        {'name': _('Down Speed'), 'status': ['download_payload_rate']},
-    'upload_speed':
-        {'name': _('Up Speed'), 'status': ['upload_payload_rate']},
-    'max_download_speed':
-        {'name': _('Down Limit'), 'status': ['max_download_speed']},
-    'max_upload_speed':
-        {'name': _('Up Limit'), 'status': ['max_upload_speed']},
-    'max_connections':
-        {'name': _('Max Connections'), 'status': ['max_connections']},
-    'max_upload_slots':
-        {'name': _('Max Upload Slots'), 'status': ['max_upload_slots']},
-    'peers':
-        {'name': _('Peers'), 'status': ['num_peers', 'total_peers']},
-    'seeds':
-        {'name': _('Seeds'), 'status': ['num_seeds', 'total_seeds']},
-    'avail':
-        {'name': _('Avail'), 'status': ['distributed_copies']},
-    'seeds_peers_ratio':
-        {'name': _('Seeds:Peers'), 'status': ['seeds_peers_ratio']},
-    'time_added':
-        {'name': _('Added'), 'status': ['time_added']},
-    'tracker':
-        {'name': _('Tracker'), 'status': ['tracker_host']},
-    'download_location':
-        {'name': _('Download Folder'), 'status': ['download_location']},
-    'seeding_time':
-        {'name': _('Seeding Time'), 'status': ['seeding_time']},
-    'active_time':
-        {'name': _('Active Time'), 'status': ['active_time']},
-    'time_since_transfer':
-        {'name': _('Last Activity'), 'status': ['time_since_transfer']},
-    'finished_time':
-        {'name': _('Finished Time'), 'status': ['finished_time']},
-    'last_seen_complete':
-        {'name': _('Complete Seen'), 'status': ['last_seen_complete']},
-    'completed_time':
-        {'name': _('Completed'), 'status': ['completed_time']},
-    'eta':
-        {'name': _('ETA'), 'status': ['eta']},
-    'shared':
-        {'name': _('Shared'), 'status': ['shared']},
-    'prioritize_first_last':
-        {'name': _('Prioritize First/Last'), 'status': ['prioritize_first_last']},
-    'sequential_download':
-        {'name': _('Sequential Download'), 'status': ['sequential_download']},
-    'is_auto_managed':
-        {'name': _('Auto Managed'), 'status': ['is_auto_managed']},
-    'auto_managed':
-        {'name': _('Auto Managed'), 'status': ['auto_managed']},
-    'stop_at_ratio':
-        {'name': _('Stop At Ratio'), 'status': ['stop_at_ratio']},
-    'stop_ratio':
-        {'name': _('Stop Ratio'), 'status': ['stop_ratio']},
-    'remove_at_ratio':
-        {'name': _('Remove At Ratio'), 'status': ['remove_at_ratio']},
-    'move_completed':
-        {'name': _('Move On Completed'), 'status': ['move_completed']},
-    'move_completed_path':
-        {'name': _('Move Completed Path'), 'status': ['move_completed_path']},
-    'move_on_completed':
-        {'name': _('Move On Completed'), 'status': ['move_on_completed']},
-    'move_on_completed_path':
-        {'name': _('Move On Completed Path'), 'status': ['move_on_completed_path']},
-    'owner':
-        {'name': _('Owner'), 'status': ['owner']},
-    'pieces':
-        {'name': _('Pieces'), 'status': ['num_pieces', 'piece_length']},
-    'seed_rank':
-        {'name': _('Seed Rank'), 'status': ['seed_rank']}
+    'queue': {'name': '#', 'status': ['queue']},
+    'name': {'name': _('Name'), 'status': ['state', 'name']},
+    'progress_state': {'name': _('Progress'), 'status': ['progress', 'state']},
+    'state': {'name': _('State'), 'status': ['state']},
+    'progress': {'name': _('Progress'), 'status': ['progress']},
+    'size': {'name': _('Size'), 'status': ['total_wanted']},
+    'downloaded': {'name': _('Downloaded'), 'status': ['all_time_download']},
+    'uploaded': {'name': _('Uploaded'), 'status': ['total_uploaded']},
+    'remaining': {'name': _('Remaining'), 'status': ['total_remaining']},
+    'ratio': {'name': _('Ratio'), 'status': ['ratio']},
+    'download_speed': {'name': _('Down Speed'), 'status': ['download_payload_rate']},
+    'upload_speed': {'name': _('Up Speed'), 'status': ['upload_payload_rate']},
+    'max_download_speed': {'name': _('Down Limit'), 'status': ['max_download_speed']},
+    'max_upload_speed': {'name': _('Up Limit'), 'status': ['max_upload_speed']},
+    'max_connections': {'name': _('Max Connections'), 'status': ['max_connections']},
+    'max_upload_slots': {'name': _('Max Upload Slots'), 'status': ['max_upload_slots']},
+    'peers': {'name': _('Peers'), 'status': ['num_peers', 'total_peers']},
+    'seeds': {'name': _('Seeds'), 'status': ['num_seeds', 'total_seeds']},
+    'avail': {'name': _('Avail'), 'status': ['distributed_copies']},
+    'seeds_peers_ratio': {'name': _('Seeds:Peers'), 'status': ['seeds_peers_ratio']},
+    'time_added': {'name': _('Added'), 'status': ['time_added']},
+    'tracker': {'name': _('Tracker'), 'status': ['tracker_host']},
+    'download_location': {
+        'name': _('Download Folder'),
+        'status': ['download_location'],
+    },
+    'seeding_time': {'name': _('Seeding Time'), 'status': ['seeding_time']},
+    'active_time': {'name': _('Active Time'), 'status': ['active_time']},
+    'time_since_transfer': {
+        'name': _('Last Activity'),
+        'status': ['time_since_transfer'],
+    },
+    'finished_time': {'name': _('Finished Time'), 'status': ['finished_time']},
+    'last_seen_complete': {
+        'name': _('Complete Seen'),
+        'status': ['last_seen_complete'],
+    },
+    'completed_time': {'name': _('Completed'), 'status': ['completed_time']},
+    'eta': {'name': _('ETA'), 'status': ['eta']},
+    'shared': {'name': _('Shared'), 'status': ['shared']},
+    'prioritize_first_last': {
+        'name': _('Prioritize First/Last'),
+        'status': ['prioritize_first_last'],
+    },
+    'sequential_download': {
+        'name': _('Sequential Download'),
+        'status': ['sequential_download'],
+    },
+    'is_auto_managed': {'name': _('Auto Managed'), 'status': ['is_auto_managed']},
+    'auto_managed': {'name': _('Auto Managed'), 'status': ['auto_managed']},
+    'stop_at_ratio': {'name': _('Stop At Ratio'), 'status': ['stop_at_ratio']},
+    'stop_ratio': {'name': _('Stop Ratio'), 'status': ['stop_ratio']},
+    'remove_at_ratio': {'name': _('Remove At Ratio'), 'status': ['remove_at_ratio']},
+    'move_completed': {'name': _('Move On Completed'), 'status': ['move_completed']},
+    'move_completed_path': {
+        'name': _('Move Completed Path'),
+        'status': ['move_completed_path'],
+    },
+    'move_on_completed': {
+        'name': _('Move On Completed'),
+        'status': ['move_on_completed'],
+    },
+    'move_on_completed_path': {
+        'name': _('Move On Completed Path'),
+        'status': ['move_on_completed_path'],
+    },
+    'owner': {'name': _('Owner'), 'status': ['owner']},
+    'pieces': {'name': _('Pieces'), 'status': ['num_pieces', 'piece_length']},
+    'seed_rank': {'name': _('Seed Rank'), 'status': ['seed_rank']},
+    'super_seeding': {'name': _('Super Seeding'), 'status': ['super_seeding']},
 }
 
 TRACKER_STATUS_TRANSLATION = [
     _('Error'),
     _('Warning'),
     _('Announce OK'),
-    _('Announce Sent')
+    _('Announce Sent'),
 ]
 
 PREFS_CATOG_TRANS = {
@@ -154,11 +135,11 @@ PREFS_CATOG_TRANS = {
     'cache': _('Cache'),
     'other': _('Other'),
     'daemon': _('Daemon'),
-    'plugins': _('Plugins')
+    'plugins': _('Plugins'),
 }
 
 FILE_PRIORITY = {
-    0: 'Ignore',
+    0: 'Skip',
     1: 'Low',
     2: 'Low',
     3: 'Low',
@@ -166,7 +147,7 @@ FILE_PRIORITY = {
     5: 'High',
     6: 'High',
     7: 'High',
-    _('Ignore'): 0,
+    _('Skip'): 0,
     _('Low'): 1,
     _('Normal'): 4,
     _('High'): 7,
@@ -176,75 +157,102 @@ del _
 
 # The keys from session statistics for cache status.
 DISK_CACHE_KEYS = [
-    'disk.num_blocks_read', 'disk.num_blocks_written', 'disk.num_read_ops', 'disk.num_write_ops',
-    'disk.num_blocks_cache_hits', 'read_hit_ratio', 'write_hit_ratio', 'disk.disk_blocks_in_use',
-    'disk.read_cache_blocks'
+    'disk.num_blocks_read',
+    'disk.num_blocks_written',
+    'disk.num_read_ops',
+    'disk.num_write_ops',
+    'disk.num_blocks_cache_hits',
+    'read_hit_ratio',
+    'write_hit_ratio',
+    'disk.disk_blocks_in_use',
+    'disk.read_cache_blocks',
 ]
 
 
 class TorrentInfo(object):
+    """Collects information about a torrent file.
+
+    Args:
+        filename (str): The path to the .torrent file.
+        filetree (int, optional): The version of filetree to create (defaults to 1).
+        metainfo (bytes, optional): A bencoded filedump from a .torrent file.
+        metadata (bytes, optional): A bencoded metadata info_dict.
+
     """
-    Collects information about a torrent file.
 
-    :param filename: The path to the torrent
-    :type filename: string
+    def __init__(self, filename='', filetree=1, metainfo=None, metadata=None):
+        # Get the torrent metainfo from the torrent file
+        if metadata:
+            self._metainfo_dict = {b'info': bencode.bdecode(metadata)}
 
-    """
-    def __init__(self, filename, filetree=1):
-        # Get the torrent data from the torrent file
-        try:
-            log.debug('Attempting to open %s.', filename)
-            with open(filename, 'rb') as _file:
-                self.__m_filedata = _file.read()
-        except IOError as ex:
-            log.warning('Unable to open %s: %s', filename, ex)
-            raise ex
-        try:
-            self.__m_metadata = bencode.bdecode(self.__m_filedata)
-        except bencode.BTFailure as ex:
-            log.warning('Failed to decode %s: %s', filename, ex)
-            raise ex
+            self._metainfo = bencode.bencode(self._metainfo_dict)
+        else:
+            self._metainfo = metainfo
+            if filename and not self._metainfo:
+                log.debug('Attempting to open %s.', filename)
+                try:
+                    with open(filename, 'rb') as _file:
+                        self._metainfo = _file.read()
+                except IOError as ex:
+                    log.warning('Unable to open %s: %s', filename, ex)
+                    return
 
-        self.__m_info_hash = sha(bencode.bencode(self.__m_metadata['info'])).hexdigest()
+            try:
+                self._metainfo_dict = bencode.bdecode(self._metainfo)
+            except bencode.BTFailure as ex:
+                log.warning('Failed to decode %s: %s', filename, ex)
+                return
+
+        # info_dict with keys decoded.
+        info_dict = {k.decode(): v for k, v in self._metainfo_dict[b'info'].items()}
+        self._info_hash = sha(bencode.bencode(info_dict)).hexdigest()
 
         # Get encoding from torrent file if available
-        self.encoding = None
-        if 'encoding' in self.__m_metadata:
-            self.encoding = self.__m_metadata['encoding']
-        elif 'codepage' in self.__m_metadata:
-            self.encoding = str(self.__m_metadata['codepage'])
-        if not self.encoding:
-            self.encoding = 'UTF-8'
+        encoding = info_dict.get('encoding', None)
+        codepage = info_dict.get('codepage', None)
+        if not encoding:
+            encoding = codepage if codepage else b'UTF-8'
+        if encoding:
+            encoding = encoding.decode()
 
-        # Check if 'name.utf-8' is in the torrent and if not try to decode the string
-        # using the encoding found.
-        if 'name.utf-8' in self.__m_metadata['info']:
-            self.__m_name = decode_bytes(self.__m_metadata['info']['name.utf-8'])
+        # Decode 'name' with encoding unless 'name.utf-8' found.
+        if 'name.utf-8' in info_dict:
+            self._name = decode_bytes(info_dict['name.utf-8'])
         else:
-            self.__m_name = decode_bytes(self.__m_metadata['info']['name'], self.encoding)
+            self._name = decode_bytes(info_dict['name'], encoding)
 
         # Get list of files from torrent info
-        paths = {}
-        dirs = {}
-        if 'files' in self.__m_metadata['info']:
-            prefix = ''
-            if len(self.__m_metadata['info']['files']) > 1:
-                prefix = self.__m_name
+        self._files = []
+        if 'files' in info_dict:
+            paths = {}
+            dirs = {}
+            prefix = self._name if len(info_dict['files']) > 1 else ''
 
-            for index, f in enumerate(self.__m_metadata['info']['files']):
+            for index, f in enumerate(info_dict['files']):
+                f = {k.decode(): v for k, v in f.items()}
+
                 if 'path.utf-8' in f:
-                    path = decode_bytes(os.path.join(prefix, *f['path.utf-8']))
+                    path = decode_bytes(os.path.join(*f['path.utf-8']))
                     del f['path.utf-8']
                 else:
-                    path = os.path.join(prefix, decode_bytes(os.path.join(*f['path']), self.encoding))
+                    path = decode_bytes(os.path.join(*f['path']), encoding)
+
+                if prefix:
+                    path = os.path.join(prefix, path)
+
+                self._files.append(
+                    {'path': path, 'size': f['length'], 'download': True}
+                )
+
                 f['path'] = path
                 f['index'] = index
                 if 'sha1' in f and len(f['sha1']) == 20:
-                    f['sha1'] = f['sha1'].encode('hex')
+                    f['sha1'] = hexlify(f['sha1']).decode()
                 if 'ed2k' in f and len(f['ed2k']) == 16:
-                    f['ed2k'] = f['ed2k'].encode('hex')
+                    f['ed2k'] = hexlify(f['ed2k']).decode()
                 if 'filehash' in f and len(f['filehash']) == 20:
-                    f['filehash'] = f['filehash'].encode('hex')
+                    f['filehash'] = hexlify(f['filehash']).decode()
+
                 paths[path] = f
                 dirname = os.path.dirname(path)
                 while dirname:
@@ -253,6 +261,7 @@ class TorrentInfo(object):
                     dirname = os.path.dirname(dirname)
 
             if filetree == 2:
+
                 def walk(path, item):
                     if item['type'] == 'dir':
                         item.update(dirs[path])
@@ -263,6 +272,7 @@ class TorrentInfo(object):
                 file_tree = FileTree2(list(paths))
                 file_tree.walk(walk)
             else:
+
                 def walk(path, item):
                     if isinstance(item, dict):
                         return item
@@ -270,84 +280,68 @@ class TorrentInfo(object):
 
                 file_tree = FileTree(paths)
                 file_tree.walk(walk)
-            self.__m_files_tree = file_tree.get_tree()
+            self._files_tree = file_tree.get_tree()
         else:
+            self._files.append(
+                {'path': self._name, 'size': info_dict['length'], 'download': True}
+            )
             if filetree == 2:
-                self.__m_files_tree = {
+                self._files_tree = {
                     'contents': {
-                        self.__m_name: {
+                        self._name: {
                             'type': 'file',
                             'index': 0,
-                            'length': self.__m_metadata['info']['length'],
-                            'download': True
+                            'length': info_dict['length'],
+                            'download': True,
                         }
                     }
                 }
             else:
-                self.__m_files_tree = {
-                    self.__m_name: (0, self.__m_metadata['info']['length'], True)
-                }
-
-        self.__m_files = []
-        if 'files' in self.__m_metadata['info']:
-            prefix = ''
-            if len(self.__m_metadata['info']['files']) > 1:
-                prefix = self.__m_name
-
-            for f in self.__m_metadata['info']['files']:
-                self.__m_files.append({
-                    'path': f['path'],
-                    'size': f['length'],
-                    'download': True
-                })
-        else:
-            self.__m_files.append({
-                'path': self.__m_name,
-                'size': self.__m_metadata['info']['length'],
-                'download': True
-            })
+                self._files_tree = {self._name: (0, info_dict['length'], True)}
 
     def as_dict(self, *keys):
-        """
-        Return the torrent info as a dictionary, only including the passed in
-        keys.
+        """The torrent info as a dictionary, filtered by keys.
 
-        :param keys: a number of key strings
-        :type keys: string
+        Args:
+            keys (str): A space-separated string of keys.
+
+        Returns:
+            dict: The torrent info dict with specified keys.
         """
-        return dict([(key, getattr(self, key)) for key in keys])
+        return {key: getattr(self, key) for key in keys}
 
     @property
     def name(self):
-        """
-        The name of the torrent.
+        """The name of the torrent.
 
-        :rtype: string
+        Returns:
+            str: The torrent name.
+
         """
-        return self.__m_name
+        return self._name
 
     @property
     def info_hash(self):
-        """
-        The torrents info_hash
+        """The calculated torrent info_hash.
 
-        :rtype: string
+        Returns:
+            str: The torrent info_hash.
         """
-        return self.__m_info_hash
+        return self._info_hash
 
     @property
     def files(self):
-        """
-        A list of the files that the torrent contains.
+        """The files that the torrent contains.
 
-        :rtype: list
+        Returns:
+            list: The list of torrent files.
+
         """
-        return self.__m_files
+        return self._files
 
     @property
     def files_tree(self):
-        """
-        A dictionary based tree of the files.
+        """A tree of the files the torrent contains.
 
         ::
 
@@ -357,28 +351,31 @@ class TorrentInfo(object):
                 }
             }
 
-        :rtype: dictionary
+        Returns:
+            dict: The tree of files.
+
         """
-        return self.__m_files_tree
+        return self._files_tree
 
     @property
     def metadata(self):
-        """
-        The torrents metadata.
+        """The torrents metainfo dictionary.
 
-        :rtype: dictionary
+        Returns:
+            dict: The bdecoded metainfo dictionary.
+
         """
-        return self.__m_metadata
+        return self._metainfo_dict
 
     @property
     def filedata(self):
-        """
-        The torrents file data.  This will be the bencoded dictionary read
-        from the torrent file.
+        """The contents of the .torrent file.
 
-        :rtype: string
+        Returns:
+            str: The metainfo bencoded dictionary from a torrent file.
+
         """
-        return self.__m_filedata
+        return self._metainfo
 
 
 class FileTree2(object):
@@ -398,10 +395,7 @@ class FileTree2(object):
                 directory, path = path.split('/', 1)
                 child = parent['contents'].get(directory)
                 if child is None:
-                    parent['contents'][directory] = {
-                        'type': 'dir',
-                        'contents': {}
-                    }
+                    parent['contents'][directory] = {'type': 'dir', 'contents': {}}
                 parent = parent['contents'][directory]
             return parent, path
 
@@ -409,15 +403,10 @@ class FileTree2(object):
             if path[-1] == '/':
                 path = path[:-1]
                 parent, path = get_parent(path)
-                parent['contents'][path] = {
-                    'type': 'dir',
-                    'contents': {}
-                }
+                parent['contents'][path] = {'type': 'dir', 'contents': {}}
             else:
                 parent, path = get_parent(path)
-                parent['contents'][path] = {
-                    'type': 'file'
-                }
+                parent['contents'][path] = {'type': 'file'}
 
     def get_tree(self):
         """
@@ -438,18 +427,22 @@ class FileTree2(object):
             and `dict` for a directory.
         :type callback: function
         """
+
         def walk(directory, parent_path):
             for path in list(directory['contents']):
                 full_path = os.path.join(parent_path, path).replace('\\', '/')
                 if directory['contents'][path]['type'] == 'dir':
-                    directory['contents'][path] = callback(
-                        full_path, directory['contents'][path]
-                        ) or directory['contents'][path]
+                    directory['contents'][path] = (
+                        callback(full_path, directory['contents'][path])
+                        or directory['contents'][path]
+                    )
                     walk(directory['contents'][path], full_path)
                 else:
-                    directory['contents'][path] = callback(
-                        full_path, directory['contents'][path]
-                        ) or directory['contents'][path]
+                    directory['contents'][path] = (
+                        callback(full_path, directory['contents'][path])
+                        or directory['contents'][path]
+                    )
+
         walk(self.tree, '')
 
     def __str__(self):
@@ -460,6 +453,7 @@ class FileTree2(object):
             path = os.path.basename(path)
             path = path + '/' if item['type'] == 'dir' else path
             lines.append('  ' * depth + path)
+
         self.walk(write)
         return '\n'.join(lines)
 
@@ -501,10 +495,12 @@ class FileTree(object):
         :returns: the file tree.
         :rtype: dictionary
         """
+
         def to_tuple(path, item):
             if isinstance(item, dict):
                 return item
             return tuple(item)
+
         self.walk(to_tuple)
         return self.tree
 
@@ -518,14 +514,20 @@ class FileTree(object):
             and `dict` for a directory.
         :type callback: function
         """
+
         def walk(directory, parent_path):
             for path in list(directory):
                 full_path = os.path.join(parent_path, path)
                 if isinstance(directory[path], dict):
-                    directory[path] = callback(full_path, directory[path]) or directory[path]
+                    directory[path] = (
+                        callback(full_path, directory[path]) or directory[path]
+                    )
                     walk(directory[path], full_path)
                 else:
-                    directory[path] = callback(full_path, directory[path]) or directory[path]
+                    directory[path] = (
+                        callback(full_path, directory[path]) or directory[path]
+                    )
+
         walk(self.tree, '')
 
     def __str__(self):
@@ -536,5 +538,6 @@ class FileTree(object):
             path = os.path.basename(path)
             path = isinstance(item, dict) and path + '/' or path
             lines.append('  ' * depth + path)
+
         self.walk(write)
         return '\n'.join(lines)

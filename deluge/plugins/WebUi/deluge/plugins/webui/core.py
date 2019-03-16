@@ -30,11 +30,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-DEFAULT_PREFS = {
-    'enabled': False,
-    'ssl': False,
-    'port': 8112
-}
+DEFAULT_PREFS = {'enabled': False, 'ssl': False, 'port': 8112}
 
 
 class Core(CorePluginBase):
@@ -82,7 +78,7 @@ class Core(CorePluginBase):
         try:
             self.server.start()
         except CannotListenError as ex:
-            log.warn('Failed to start WebUI server: %s', ex)
+            log.warning('Failed to start WebUI server: %s', ex)
             raise
         return True
 
@@ -96,7 +92,7 @@ class Core(CorePluginBase):
 
     @export
     def set_config(self, config):
-        'sets the config dictionary'
+        """Sets the config dictionary."""
 
         action = None
         if 'enabled' in config:
@@ -120,5 +116,5 @@ class Core(CorePluginBase):
 
     @export
     def get_config(self):
-        'returns the config dictionary'
+        """Returns the config dictionary."""
         return self.config.config

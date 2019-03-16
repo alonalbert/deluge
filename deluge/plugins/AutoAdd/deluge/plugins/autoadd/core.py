@@ -15,10 +15,10 @@
 
 from __future__ import unicode_literals
 
-import base64
 import logging
 import os
 import shutil
+from base64 import b64encode
 
 from twisted.internet import reactor
 from twisted.internet.task import LoopingCall, deferLater
@@ -35,10 +35,7 @@ from deluge.plugins.pluginbase import CorePluginBase
 log = logging.getLogger(__name__)
 
 
-DEFAULT_PREFS = {
-    'watchdirs': {},
-    'next_id': 1
-}
+DEFAULT_PREFS = {'watchdirs': {}, 'next_id': 1}
 
 
 OPTIONS_AVAILABLE = {  # option: builtin
@@ -64,7 +61,7 @@ OPTIONS_AVAILABLE = {  # option: builtin
     'add_paused': True,
     'queue_to_top': False,
     'owner': True,
-    'seed_mode': True
+    'seed_mode': True,
 }
 
 MAX_NUM_ATTEMPTS = 10
@@ -72,6 +69,7 @@ MAX_NUM_ATTEMPTS = 10
 
 class AutoaddOptionsChangedEvent(DelugeEvent):
     """Emitted when the options for the plugin are changed."""
+
     def __init__(self):
         pass
 
@@ -90,6 +88,7 @@ class Core(CorePluginBase):
         self.config.save()
         self.watchdirs = self.config['watchdirs']
 
+        self.rpcserver = component.get('RPCServer')
         component.get('EventManager').register_event_handler(
             'PreTorrentRemovedEvent', self.__on_pre_torrent_removed
         )
@@ -123,14 +122,10 @@ class Core(CorePluginBase):
         """Update the options for a watch folder."""
         watchdir_id = str(watchdir_id)
         options = self._make_unicode(options)
-        check_input(
-            watchdir_id in self.watchdirs, _('Watch folder does not exist.')
-        )
+        check_input(watchdir_id in self.watchdirs, _('Watch folder does not exist.'))
         if 'path' in options:
             options['abspath'] = os.path.abspath(options['path'])
-            check_input(
-                os.path.isdir(options['abspath']), _('Path does not exist.')
-            )
+            check_input(os.path.isdir(options['abspath']), _('Path does not exist.'))
             for w_id, w in self.watchdirs.items():
                 if options['abspath'] == w['abspath'] and watchdir_id != w_id:
                     raise Exception('Path is already being watched.')
@@ -210,8 +205,7 @@ class Core(CorePluginBase):
         watchdir = self.watchdirs[watchdir_id]
         if not watchdir['enabled']:
             # We shouldn't be updating because this watchdir is not enabled
-            log.debug('Watchdir id %s is not enabled. Disabling it.',
-                      watchdir_id)
+            log.debug('Watchdir id %s is not enabled. Disabling it.', watchdir_id)
             self.disable_watchdir(watchdir_id)
             return
 
@@ -228,7 +222,10 @@ class Core(CorePluginBase):
         # without them is valid, and applies all its settings.
         for option, value in watchdir.items():
             if OPTIONS_AVAILABLE.get(option):
-                if watchdir.get(option + '_toggle', True) or option in ['owner', 'seed_mode']:
+                if watchdir.get(option + '_toggle', True) or option in [
+                    'owner',
+                    'seed_mode',
+                ]:
                     options[option] = value
 
         # Check for .magnet files containing multiple magnet links and
@@ -237,19 +234,27 @@ class Core(CorePluginBase):
             try:
                 filepath = os.path.join(watchdir['abspath'], filename)
             except UnicodeDecodeError as ex:
-                log.error('Unable to auto add torrent due to improper filename encoding: %s', ex)
+                log.error(
+                    'Unable to auto add torrent due to improper filename encoding: %s',
+                    ex,
+                )
                 continue
             if os.path.isdir(filepath):
                 # Skip directories
                 continue
-            elif os.path.splitext(filename)[1] == '.magnet' and self.split_magnets(filepath):
+            elif os.path.splitext(filename)[1] == '.magnet' and self.split_magnets(
+                filepath
+            ):
                 os.remove(filepath)
 
         for filename in os.listdir(watchdir['abspath']):
             try:
                 filepath = os.path.join(watchdir['abspath'], filename)
             except UnicodeDecodeError as ex:
-                log.error('Unable to auto add torrent due to improper filename encoding: %s', ex)
+                log.error(
+                    'Unable to auto add torrent due to improper filename encoding: %s',
+                    ex,
+                )
                 continue
 
             if os.path.isdir(filepath):
@@ -271,8 +276,11 @@ class Core(CorePluginBase):
                 if filename in self.invalid_torrents:
                     self.invalid_torrents[filename] += 1
                     if self.invalid_torrents[filename] >= MAX_NUM_ATTEMPTS:
-                        log.warning('Maximum attempts reached while trying to add the '
-                                    'torrent file with the path %s', filepath)
+                        log.warning(
+                            'Maximum attempts reached while trying to add the '
+                            'torrent file with the path %s',
+                            filepath,
+                        )
                         os.rename(filepath, filepath + '.invalid')
                         del self.invalid_torrents[filename]
                 else:
@@ -285,13 +293,15 @@ class Core(CorePluginBase):
                         label = component.get('CorePlugin.Label')
                         if not watchdir['label'] in label.get_labels():
                             label.add(watchdir['label'])
-                        log.critical(torrent_id)
                         try:
                             label.set_torrent(torrent_id, watchdir['label'])
                         except Exception as ex:
                             log.error('Unable to set label: %s', ex)
 
-                if watchdir.get('queue_to_top_toggle', True) and 'queue_to_top' in watchdir:
+                if (
+                    watchdir.get('queue_to_top_toggle', True)
+                    and 'queue_to_top' in watchdir
+                ):
                     if watchdir['queue_to_top']:
                         component.get('TorrentManager').queue_top(torrent_id)
                     else:
@@ -305,24 +315,35 @@ class Core(CorePluginBase):
                 elif watchdir.get('copy_torrent_toggle'):
                     copy_torrent_path = watchdir['copy_torrent']
                     copy_torrent_file = os.path.join(copy_torrent_path, filename)
-                    log.debug('Moving added torrent file "%s" to "%s"',
-                              os.path.basename(filepath), copy_torrent_path)
+                    log.debug(
+                        'Moving added torrent file "%s" to "%s"',
+                        os.path.basename(filepath),
+                        copy_torrent_path,
+                    )
                     shutil.move(filepath, copy_torrent_file)
                 else:
                     os.remove(filepath)
 
-            def fail_torrent_add(err_msg, filepath):
+            def fail_torrent_add(err_msg, filepath, magnet):
                 # torrent handle is invalid and so is the magnet link
-                log.error('Cannot Autoadd torrent file: %s: %s', filepath, err_msg)
+                log.error(
+                    'Cannot Autoadd %s: %s: %s',
+                    'magnet' if magnet else 'torrent file',
+                    filepath,
+                    err_msg,
+                )
                 os.rename(filepath, filepath + '.invalid')
 
             try:
                 # The torrent looks good, so lets add it to the session.
                 if magnet:
-                    d = component.get('Core').add_torrent_magnet(filedump.strip(), options)
+                    d = component.get('Core').add_torrent_magnet(
+                        filedump.strip(), options
+                    )
                 else:
                     d = component.get('Core').add_torrent_file_async(
-                        filename, base64.encodestring(filedump), options)
+                        filename, b64encode(filedump), options
+                    )
                     d.addCallback(on_torrent_added, filename, filepath)
                     d.addErrback(fail_torrent_add, filepath, magnet)
             except AddTorrentError as ex:
@@ -331,8 +352,11 @@ class Core(CorePluginBase):
     def on_update_watchdir_error(self, failure, watchdir_id):
         """Disables any watch folders with un-handled exceptions."""
         self.disable_watchdir(watchdir_id)
-        log.error('Disabling "%s", error during update: %s',
-                  self.watchdirs[watchdir_id]['path'], failure)
+        log.error(
+            'Disabling "%s", error during update: %s',
+            self.watchdirs[watchdir_id]['path'],
+            failure,
+        )
 
     @export
     def enable_watchdir(self, watchdir_id):
@@ -379,12 +403,13 @@ class Core(CorePluginBase):
 
     @export
     def get_watchdirs(self):
-        rpcserver = component.get('RPCServer')
-        session_user = rpcserver.get_session_user()
-        session_auth_level = rpcserver.get_session_auth_level()
+        session_user = self.rpcserver.get_session_user()
+        session_auth_level = self.rpcserver.get_session_auth_level()
         if session_auth_level == AUTH_LEVEL_ADMIN:
-            log.debug('Current logged in user %s is an ADMIN, send all '
-                      'watchdirs', session_user)
+            log.debug(
+                'Current logged in user %s is an ADMIN, send all ' 'watchdirs',
+                session_user,
+            )
             return self.watchdirs
 
         watchdirs = {}
@@ -392,8 +417,12 @@ class Core(CorePluginBase):
             if watchdir.get('owner', 'localclient') == session_user:
                 watchdirs[watchdir_id] = watchdir
 
-        log.debug('Current logged in user %s is not an ADMIN, send only '
-                  'their watchdirs: %s', session_user, list(watchdirs))
+        log.debug(
+            'Current logged in user %s is not an ADMIN, send only '
+            'their watchdirs: %s',
+            session_user,
+            list(watchdirs),
+        )
         return watchdirs
 
     def _make_unicode(self, options):
@@ -414,7 +443,7 @@ class Core(CorePluginBase):
         check_input(os.path.isdir(abswatchdir), _('Path does not exist.'))
         check_input(
             os.access(abswatchdir, os.R_OK | os.W_OK),
-            'You must have read and write access to watch folder.'
+            'You must have read and write access to watch folder.',
         )
         if abswatchdir in [wd['abspath'] for wd in self.watchdirs.values()]:
             raise Exception('Path is already being watched.')
@@ -433,7 +462,9 @@ class Core(CorePluginBase):
     def remove(self, watchdir_id):
         """Remove a watch folder."""
         watchdir_id = str(watchdir_id)
-        check_input(watchdir_id in self.watchdirs, 'Unknown Watchdir: %s' % self.watchdirs)
+        check_input(
+            watchdir_id in self.watchdirs, 'Unknown Watchdir: %s' % self.watchdirs
+        )
         if self.watchdirs[watchdir_id]['enabled']:
             self.disable_watchdir(watchdir_id)
         del self.watchdirs[watchdir_id]
@@ -449,9 +480,11 @@ class Core(CorePluginBase):
         try:
             torrent = component.get('TorrentManager')[torrent_id]
         except KeyError:
-            log.warning('Unable to remove torrent file for torrent id %s. It'
-                        'was already deleted from the TorrentManager',
-                        torrent_id)
+            log.warning(
+                'Unable to remove torrent file for torrent id %s. It'
+                'was already deleted from the TorrentManager',
+                torrent_id,
+            )
             return
         torrent_fname = torrent.filename
         for watchdir in self.watchdirs.values():
@@ -466,9 +499,24 @@ class Core(CorePluginBase):
             if os.path.isfile(torrent_fname_path):
                 try:
                     os.remove(torrent_fname_path)
-                    log.info('Removed torrent file "%s" from "%s"',
-                             torrent_fname, copy_torrent_path)
+                    log.info(
+                        'Removed torrent file "%s" from "%s"',
+                        torrent_fname,
+                        copy_torrent_path,
+                    )
                     break
                 except OSError as ex:
-                    log.info('Failed to removed torrent file "%s" from "%s": %s',
-                             torrent_fname, copy_torrent_path, ex)
+                    log.info(
+                        'Failed to removed torrent file "%s" from "%s": %s',
+                        torrent_fname,
+                        copy_torrent_path,
+                        ex,
+                    )
+
+    @export
+    def is_admin_level(self):
+        return self.rpcserver.get_session_auth_level() == deluge.common.AUTH_LEVEL_ADMIN
+
+    @export
+    def get_auth_user(self):
+        return self.rpcserver.get_session_user()

@@ -12,7 +12,7 @@ from setuptools import find_packages, setup
 __plugin_name__ = 'Blocklist'
 __author__ = 'John Garland'
 __author_email__ = 'johnnybg+deluge@gmail.com'
-__version__ = '1.3'
+__version__ = '1.4'
 __url__ = 'http://deluge-torrent.org'
 __license__ = 'GPLv3'
 __description__ = 'Download and import IP blocklists'
@@ -35,9 +35,10 @@ setup(
     entry_points="""
     [deluge.plugin.core]
     %s = deluge.plugins.%s:CorePlugin
-    [deluge.plugin.gtkui]
+    [deluge.plugin.gtk3ui]
     %s = deluge.plugins.%s:GtkUIPlugin
     [deluge.plugin.web]
     %s = deluge.plugins.%s:WebUIPlugin
-    """ % ((__plugin_name__, __plugin_name__.lower()) * 3)
+    """
+    % ((__plugin_name__, __plugin_name__.lower()) * 3),
 )

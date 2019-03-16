@@ -2,7 +2,7 @@
 build
 .cache
 dist
-docs/source/modules
+docs/source/modules/deluge*.rst
 *egg-info
 *.egg
 *.log
@@ -12,8 +12,11 @@ _trial_temp
 .tox/
 deluge/i18n/*/
 deluge.pot
+deluge/ui/web/js/*.js
+deluge/ui/web/js/extjs/ext-extensions*.js
 *.desktop
 *.appdata.xml
 .build_data*
 osx/app
 RELEASE-VERSION
+.venv*

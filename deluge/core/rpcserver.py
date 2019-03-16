@@ -18,14 +18,25 @@ import traceback
 from collections import namedtuple
 from types import FunctionType
 
-from OpenSSL import SSL, crypto
+from OpenSSL import crypto
 from twisted.internet import defer, reactor
 from twisted.internet.protocol import Factory, connectionDone
 
 import deluge.component as component
 import deluge.configmanager
-from deluge.core.authmanager import AUTH_LEVEL_ADMIN, AUTH_LEVEL_DEFAULT, AUTH_LEVEL_NONE
-from deluge.error import DelugeError, IncompatibleClient, NotAuthorizedError, WrappedException, _ClientSideRecreateError
+from deluge.core.authmanager import (
+    AUTH_LEVEL_ADMIN,
+    AUTH_LEVEL_DEFAULT,
+    AUTH_LEVEL_NONE,
+)
+from deluge.crypto_utils import get_context_factory
+from deluge.error import (
+    DelugeError,
+    IncompatibleClient,
+    NotAuthorizedError,
+    WrappedException,
+    _ClientSideRecreateError,
+)
 from deluge.event import ClientDisconnectedEvent
 from deluge.transfer import DelugeTransferProtocol
 
@@ -47,13 +58,23 @@ def export(auth_level=AUTH_LEVEL_DEFAULT):
     :type auth_level: int
 
     """
+
     def wrap(func, *args, **kwargs):
         func._rpcserver_export = True
         func._rpcserver_auth_level = auth_level
-        doc = func.__doc__
-        func.__doc__ = '**RPC Exported Function** (*Auth Level: %s*)\n\n' % auth_level
-        if doc:
-            func.__doc__ += doc
+
+        rpc_text = '**RPC exported method** (*Auth level: %s*)' % auth_level
+
+        # Append the RPC text while ensuring correct docstring formatting.
+        if func.__doc__:
+            if func.__doc__.endswith('    '):
+                indent = func.__doc__.split('\n')[-1]
+                func.__doc__ += '\n{}'.format(indent)
+            else:
+                func.__doc__ += '\n\n'
+            func.__doc__ += rpc_text
+        else:
+            func.__doc__ = rpc_text
 
         return func
 
@@ -91,22 +112,6 @@ def format_request(call):
         return s
 
 
-class ServerContextFactory(object):
-    def getContext(self):  # NOQA: N802
-        """
-        Create an SSL context.
-
-        This loads the servers cert/private key SSL files for use with the
-        SSL transport.
-        """
-        ssl_dir = deluge.configmanager.get_config_dir('ssl')
-        ctx = SSL.Context(SSL.SSLv23_METHOD)
-        ctx.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_SSLv3)
-        ctx.use_certificate_file(os.path.join(ssl_dir, 'daemon.cert'))
-        ctx.use_privatekey_file(os.path.join(ssl_dir, 'daemon.pkey'))
-        return ctx
-
-
 class DelugeRPCProtocol(DelugeTransferProtocol):
     def __init__(self):
         super(DelugeRPCProtocol, self).__init__()
@@ -134,8 +139,10 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
 
         for call in request:
             if len(call) != 4:
-                log.debug('Received invalid rpc request: number of items '
-                          'in request is %s', len(call))
+                log.debug(
+                    'Received invalid rpc request: number of items ' 'in request is %s',
+                    len(call),
+                )
                 continue
             # log.debug('RPCRequest: %s', format_request(call))
             reactor.callLater(0, self.dispatch, *call)
@@ -152,7 +159,7 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
         try:
             self.transfer_message(data)
         except Exception as ex:
-            log.warn('Error occurred when sending message: %s.', ex)
+            log.warning('Error occurred when sending message: %s.', ex)
             log.exception(ex)
             raise
 
@@ -161,11 +168,11 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
         This method is called when a new client connects.
         """
         peer = self.transport.getPeer()
-        log.info('Deluge Client connection made from: %s:%s',
-                 peer.host, peer.port)
+        log.info('Deluge Client connection made from: %s:%s', peer.host, peer.port)
         # Set the initial auth level of this session to AUTH_LEVEL_NONE
-        self.factory.authorized_sessions[
-            self.transport.sessionno] = self.AuthLevel(AUTH_LEVEL_NONE, '')
+        self.factory.authorized_sessions[self.transport.sessionno] = self.AuthLevel(
+            AUTH_LEVEL_NONE, ''
+        )
 
     def connectionLost(self, reason=connectionDone):  # NOQA: N802
         """
@@ -184,7 +191,9 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
             del self.factory.interested_events[self.transport.sessionno]
 
         if self.factory.state == 'running':
-            component.get('EventManager').emit(ClientDisconnectedEvent(self.factory.session_id))
+            component.get('EventManager').emit(
+                ClientDisconnectedEvent(self.factory.session_id)
+            )
         log.info('Deluge client disconnected: %s', reason.value)
 
     def valid_session(self):
@@ -206,32 +215,42 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
         :type kwargs: dict
 
         """
+
         def send_error():
             """
             Sends an error response with the contents of the exception that was raised.
             """
-            exceptionType, exceptionValue, dummy_exceptionTraceback = sys.exc_info()
+            exc_type, exc_value, dummy_exc_trace = sys.exc_info()
             formated_tb = traceback.format_exc()
             try:
-                self.sendData((
-                    RPC_ERROR,
-                    request_id,
-                    exceptionType.__name__,
-                    exceptionValue._args,
-                    exceptionValue._kwargs,
-                    formated_tb
-                ))
+                self.sendData(
+                    (
+                        RPC_ERROR,
+                        request_id,
+                        exc_type.__name__,
+                        exc_value._args,
+                        exc_value._kwargs,
+                        formated_tb,
+                    )
+                )
             except AttributeError:
                 # This is not a deluge exception (object has no attribute '_args), let's wrap it
-                log.warning('An exception occurred while sending RPC_ERROR to '
-                            'client. Wrapping it and resending. Error to '
-                            'send(causing exception goes next):\n%s', formated_tb)
+                log.warning(
+                    'An exception occurred while sending RPC_ERROR to '
+                    'client. Wrapping it and resending. Error to '
+                    'send(causing exception goes next):\n%s',
+                    formated_tb,
+                )
                 try:
-                    raise WrappedException(str(exceptionValue), exceptionType.__name__, formated_tb)
+                    raise WrappedException(
+                        str(exc_value), exc_type.__name__, formated_tb
+                    )
                 except WrappedException:
                     send_error()
             except Exception as ex:
-                log.error('An exception occurred while sending RPC_ERROR to client: %s', ex)
+                log.error(
+                    'An exception occurred while sending RPC_ERROR to client: %s', ex
+                )
 
         if method == 'daemon.info':
             # This is a special case and used in the initial connection process
@@ -248,7 +267,8 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
                 ret = component.get('AuthManager').authorize(*args, **kwargs)
                 if ret:
                     self.factory.authorized_sessions[
-                        self.transport.sessionno] = self.AuthLevel(ret, args[0])
+                        self.transport.sessionno
+                    ] = self.AuthLevel(ret, args[0])
                     self.factory.session_protocols[self.transport.sessionno] = self
             except Exception as ex:
                 send_error()
@@ -290,11 +310,15 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
         log.debug('RPC dispatch %s', method)
         try:
             method_auth_requirement = self.factory.methods[method]._rpcserver_auth_level
-            auth_level = self.factory.authorized_sessions[self.transport.sessionno].auth_level
+            auth_level = self.factory.authorized_sessions[
+                self.transport.sessionno
+            ].auth_level
             if auth_level < method_auth_requirement:
                 # This session is not allowed to call this method
-                log.debug('Session %s is attempting an unauthorized method call!',
-                          self.transport.sessionno)
+                log.debug(
+                    'Session %s is attempting an unauthorized method call!',
+                    self.transport.sessionno,
+                )
                 raise NotAuthorizedError(auth_level, method_auth_requirement)
             # Set the session_id in the factory so that methods can know
             # which session is calling it.
@@ -310,6 +334,7 @@ class DelugeRPCProtocol(DelugeTransferProtocol):
             # Check if the return value is a deferred, since we'll need to
             # wait for it to fire before sending the RPC_RESPONSE
             if isinstance(ret, defer.Deferred):
+
                 def on_success(result):
                     try:
                         self.sendData((RPC_RESPONSE, request_id, result))
@@ -379,8 +404,13 @@ class RPCServer(component.Component):
         # Check for SSL keys and generate some if needed
         check_ssl_keys()
 
+        cert = os.path.join(deluge.configmanager.get_config_dir('ssl'), 'daemon.cert')
+        pkey = os.path.join(deluge.configmanager.get_config_dir('ssl'), 'daemon.pkey')
+
         try:
-            reactor.listenSSL(port, self.factory, ServerContextFactory(), interface=hostname)
+            reactor.listenSSL(
+                port, self.factory, get_context_factory(cert, pkey), interface=hostname
+            )
         except Exception as ex:
             log.debug('Daemon already running or port not available.: %s', ex)
             raise
@@ -526,18 +556,35 @@ class RPCServer(component.Component):
         :type event: :class:`deluge.event.DelugeEvent`
         """
         if not self.is_session_valid(session_id):
-            log.debug('Session ID %s is not valid. Not sending event "%s".', session_id, event.name)
+            log.debug(
+                'Session ID %s is not valid. Not sending event "%s".',
+                session_id,
+                event.name,
+            )
             return
         if session_id not in self.factory.interested_events:
-            log.debug('Session ID %s is not interested in any events. Not sending event "%s".',
-                      session_id, event.name)
+            log.debug(
+                'Session ID %s is not interested in any events. Not sending event "%s".',
+                session_id,
+                event.name,
+            )
             return
         if event.name not in self.factory.interested_events[session_id]:
-            log.debug('Session ID %s is not interested in event "%s". Not sending it.', session_id, event.name)
+            log.debug(
+                'Session ID %s is not interested in event "%s". Not sending it.',
+                session_id,
+                event.name,
+            )
             return
-        log.debug('Sending event "%s" with args "%s" to session id "%s".',
-                  event.name, event.args, session_id)
-        self.factory.session_protocols[session_id].sendData((RPC_EVENT, event.name, event.args))
+        log.debug(
+            'Sending event "%s" with args "%s" to session id "%s".',
+            event.name,
+            event.args,
+            session_id,
+        )
+        self.factory.session_protocols[session_id].sendData(
+            (RPC_EVENT, event.name, event.args)
+        )
 
     def stop(self):
         self.factory.state = 'stopping'
@@ -564,6 +611,7 @@ def generate_ssl_keys():
     This method generates a new SSL key/cert.
     """
     from deluge.common import PY2
+
     digest = 'sha256' if not PY2 else b'sha256'
 
     # Generate key pair

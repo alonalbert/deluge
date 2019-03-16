@@ -17,7 +17,7 @@ from setuptools import find_packages, setup
 __plugin_name__ = 'Stats'
 __author__ = 'Ian Martin'
 __author_email__ = 'ianmartin@cantab.net'
-__version__ = '0.3.2'
+__version__ = '0.4'
 __url__ = 'http://deluge-torrent.org'
 __license__ = 'GPLv3'
 __description__ = 'Display stats graphs'
@@ -36,17 +36,16 @@ setup(
     url=__url__,
     license=__license__,
     long_description=__long_description__,
-
     packages=find_packages(),
     namespace_packages=['deluge', 'deluge.plugins'],
     package_data=__pkg_data__,
-
     entry_points="""
     [deluge.plugin.core]
     %s = deluge.plugins.%s:CorePlugin
-    [deluge.plugin.gtkui]
+    [deluge.plugin.gtk3ui]
     %s = deluge.plugins.%s:GtkUIPlugin
     [deluge.plugin.web]
     %s = deluge.plugins.%s:WebUIPlugin
-    """ % ((__plugin_name__, __plugin_name__.lower()) * 3)
+    """
+    % ((__plugin_name__, __plugin_name__.lower()) * 3),
 )

@@ -16,15 +16,14 @@ import mimetypes
 import os
 import tempfile
 
-from OpenSSL.crypto import FILETYPE_PEM
 from twisted.application import internet, service
 from twisted.internet import defer, reactor
-from twisted.internet.ssl import SSL, Certificate, CertificateOptions, KeyPair
 from twisted.web import http, resource, server, static
 
 from deluge import common, component, configmanager
 from deluge.common import is_ipv6
 from deluge.core.rpcserver import check_ssl_keys
+from deluge.crypto_utils import get_context_factory
 from deluge.ui.tracker_icons import TrackerIcons
 from deluge.ui.translations_util import set_language, setup_translations
 from deluge.ui.web.auth import Auth
@@ -38,13 +37,11 @@ CONFIG_DEFAULTS = {
     # Misc Settings
     'enabled_plugins': [],
     'default_daemon': '',
-
     # Auth Settings
     'pwd_salt': 'c26ab3bbd8b137f99cd83c2c1c0963bcc1a35cad',
     'pwd_sha1': '2ce1a410bcdcc53064129b6d950f2e9fee4edc1e',
     'session_timeout': 3600,
     'sessions': {},
-
     # UI Settings
     'sidebar_show_zero': False,
     'sidebar_multiple_filters': True,
@@ -53,19 +50,22 @@ CONFIG_DEFAULTS = {
     'theme': 'gray',
     'first_login': True,
     'language': '',
-
     # Server Settings
     'base': '/',
     'interface': '0.0.0.0',
     'port': 8112,
     'https': False,
     'pkey': 'ssl/daemon.pkey',
-    'cert': 'ssl/daemon.cert'
+    'cert': 'ssl/daemon.cert',
 }
 
 UI_CONFIG_KEYS = (
-    'theme', 'sidebar_show_zero', 'sidebar_multiple_filters',
-    'show_session_speed', 'base', 'first_login'
+    'theme',
+    'sidebar_show_zero',
+    'sidebar_multiple_filters',
+    'show_session_speed',
+    'base',
+    'first_login',
 )
 
 
@@ -83,6 +83,20 @@ class GetText(resource.Resource):
         return compress(template.render(), request)
 
 
+class MockGetText(resource.Resource):
+    """GetText Mocking class
+
+    This class will mock the file `gettext.js` in case it does not exists.
+    It will be used to define the `_` (underscore) function for translations,
+    and will return the string to translate, as is.
+    """
+
+    def render(self, request):
+        request.setHeader(b'content-type', b'text/javascript; encoding=utf-8')
+        data = b'function _(string) { return string; }'
+        return compress(data, request)
+
+
 class Upload(resource.Resource):
     """
     Twisted Web resource to handle file uploads
@@ -95,34 +109,32 @@ class Upload(resource.Resource):
         """
 
         # Block all other HTTP methods.
-        if request.method != 'POST':
+        if request.method != b'POST':
             request.setResponseCode(http.NOT_ALLOWED)
-            return ''
+            request.finish()
+            return server.NOT_DONE_YET
 
-        if 'file' not in request.args:
-            request.setResponseCode(http.OK)
-            return json.dumps({
-                'success': True,
-                'files': []
-            })
-
-        tempdir = tempfile.mkdtemp(prefix='delugeweb-')
-        log.debug('uploading files to %s', tempdir)
-
+        files = request.args.get(b'file', [])
         filenames = []
-        for upload in request.args.get('file'):
-            fd, fn = tempfile.mkstemp('.torrent', dir=tempdir)
-            os.write(fd, upload)
-            os.close(fd)
-            filenames.append(fn)
-        log.debug('uploaded %d file(s)', len(filenames))
+
+        if files:
+            tempdir = tempfile.mkdtemp(prefix='delugeweb-')
+            log.debug('uploading files to %s', tempdir)
+
+            for upload in files:
+                fd, fn = tempfile.mkstemp('.torrent', dir=tempdir)
+                os.write(fd, upload)
+                os.close(fd)
+                filenames.append(fn)
+
+            log.debug('uploaded %d file(s)', len(filenames))
 
         request.setHeader(b'content-type', b'text/html')
         request.setResponseCode(http.OK)
-        return compress(json.dumps({
-            'success': True,
-            'files': filenames
-        }), request)
+        return compress(
+            json.dumps({'success': bool(filenames), 'files': filenames}).encode('utf8'),
+            request,
+        )
 
 
 class Render(resource.Resource):
@@ -136,24 +148,25 @@ class Render(resource.Resource):
         return self
 
     def render(self, request):
+        log.debug('Render template file: %s', request.render_file)
         if not hasattr(request, 'render_file'):
             request.setResponseCode(http.INTERNAL_SERVER_ERROR)
             return ''
 
-        if request.render_file in self.template_files:
+        request.setHeader(b'content-type', b'text/html')
+
+        tpl_file = request.render_file.decode()
+        if tpl_file in self.template_files:
             request.setResponseCode(http.OK)
-            filename = os.path.join('render', request.render_file)
         else:
             request.setResponseCode(http.NOT_FOUND)
-            filename = os.path.join('render', '404.html')
+            tpl_file = '404.html'
 
-        request.setHeader(b'content-type', b'text/html')
-        template = Template(filename=rpath(filename))
+        template = Template(filename=rpath(os.path.join('render', tpl_file)))
         return compress(template.render(), request)
 
 
 class Tracker(resource.Resource):
-
     def __init__(self):
         resource.Resource.__init__(self)
         try:
@@ -167,8 +180,9 @@ class Tracker(resource.Resource):
 
     def on_got_icon(self, icon, request):
         if icon:
-            request.setHeader(b'cache-control',
-                              b'public, must-revalidate, max-age=86400')
+            request.setHeader(
+                b'cache-control', b'public, must-revalidate, max-age=86400'
+            )
             request.setHeader(b'content-type', icon.get_mimetype().encode('utf8'))
             request.setResponseCode(http.OK)
             request.write(icon.get_data())
@@ -192,9 +206,10 @@ class Flag(resource.Resource):
         path = ('ui', 'data', 'pixmaps', 'flags', request.country.lower() + '.png')
         filename = common.resource_filename('deluge', os.path.join(*path))
         if os.path.exists(filename):
-            request.setHeader('cache-control',
-                              'public, must-revalidate, max-age=86400')
-            request.setHeader('content-type', 'image/png')
+            request.setHeader(
+                b'cache-control', b'public, must-revalidate, max-age=86400'
+            )
+            request.setHeader(b'content-type', b'image/png')
             with open(filename, 'rb') as _file:
                 data = _file.read()
             request.setResponseCode(http.OK)
@@ -205,7 +220,6 @@ class Flag(resource.Resource):
 
 
 class LookupResource(resource.Resource, component.Component):
-
     def __init__(self, name, *directories):
         resource.Resource.__init__(self)
         component.Component.__init__(self, name)
@@ -232,16 +246,16 @@ class LookupResource(resource.Resource, component.Component):
 
     def render(self, request):
         log.debug('Requested path: %s', request.lookup_path)
-        path = os.path.dirname(request.lookup_path)
+        path = os.path.dirname(request.lookup_path).decode()
 
         if path in self.__paths:
-            filename = os.path.basename(request.path)
+            filename = os.path.basename(request.path).decode()
             for directory in self.__paths[path]:
-                if os.path.join(directory, filename):
-                    path = os.path.join(directory, filename)
+                path = os.path.join(directory, filename)
+                if os.path.isfile(path):
                     log.debug('Serving path: %s', path)
                     mime_type = mimetypes.guess_type(path)
-                    request.setHeader(b'content-type', mime_type[0])
+                    request.setHeader(b'content-type', mime_type[0].encode())
                     with open(path, 'rb') as _file:
                         data = _file.read()
                     return compress(data, request)
@@ -253,13 +267,16 @@ class LookupResource(resource.Resource, component.Component):
 
 
 class ScriptResource(resource.Resource, component.Component):
-
     def __init__(self):
         resource.Resource.__init__(self)
         component.Component.__init__(self, 'Scripts')
         self.__scripts = {}
         for script_type in ['normal', 'debug', 'dev']:
-            self.__scripts[script_type] = {'scripts': {}, 'order': [], 'files_exist': True}
+            self.__scripts[script_type] = {
+                'scripts': {},
+                'order': [],
+                'files_exist': True,
+            }
 
     def has_script_type_files(self, script_type):
         """Returns whether all the script files exist for this script type.
@@ -364,9 +381,15 @@ class ScriptResource(resource.Resource, component.Component):
 
                     # Ensure sub-directory scripts are top of list with root directory scripts bottom.
                     if dirnames:
-                        scripts.extend(['js/' + os.path.basename(root) + '/' + f for f in files])
+                        scripts.extend(
+                            ['js/' + os.path.basename(root) + '/' + f for f in files]
+                        )
                     else:
-                        dirpath = os.path.basename(os.path.dirname(root)) + '/' + os.path.basename(root)
+                        dirpath = (
+                            os.path.basename(os.path.dirname(root))
+                            + '/'
+                            + os.path.basename(root)
+                        )
                         for filename in reversed(files):
                             scripts.insert(script_idx, 'js/' + dirpath + '/' + filename)
 
@@ -378,32 +401,32 @@ class ScriptResource(resource.Resource, component.Component):
 
     def getChild(self, path, request):  # NOQA: N802
         if hasattr(request, 'lookup_path'):
-            request.lookup_path += '/' + path
+            request.lookup_path += b'/' + path
         else:
             request.lookup_path = path
         return self
 
     def render(self, request):
         log.debug('Requested path: %s', request.lookup_path)
-
+        lookup_path = request.lookup_path.decode()
         for script_type in ('dev', 'debug', 'normal'):
             scripts = self.__scripts[script_type]['scripts']
             for pattern in scripts:
-                if not request.lookup_path.startswith(pattern):
+                if not lookup_path.startswith(pattern):
                     continue
 
                 filepath = scripts[pattern]
                 if isinstance(filepath, tuple):
                     filepath = filepath[0]
 
-                path = filepath + request.lookup_path[len(pattern):]
+                path = filepath + lookup_path[len(pattern) :]
 
                 if not os.path.isfile(path):
                     continue
 
                 log.debug('Serving path: %s', path)
                 mime_type = mimetypes.guess_type(path)
-                request.setHeader(b'content-type', mime_type[0])
+                request.setHeader(b'content-type', mime_type[0].encode())
                 with open(path, 'rb') as _file:
                     data = _file.read()
                 return compress(data, request)
@@ -420,30 +443,60 @@ class TopLevel(resource.Resource):
     __stylesheets = [
         'css/ext-all-notheme.css',
         'css/ext-extensions.css',
-        'css/deluge.css'
+        'css/deluge.css',
     ]
 
     def __init__(self):
         resource.Resource.__init__(self)
-        self.putChild('css', LookupResource('Css', rpath('css')))
-        self.putChild('gettext.js', GetText())
-        self.putChild('flag', Flag())
-        self.putChild('icons', LookupResource('Icons', rpath('icons')))
-        self.putChild('images', LookupResource('Images', rpath('images')))
+
+        self.putChild(b'css', LookupResource('Css', rpath('css')))
+        if os.path.isfile(rpath('js', 'gettext.js')):
+            self.putChild(b'gettext.js', GetText())
+        else:
+            log.warning(
+                'Cannot find "gettext.js" translation file!'
+                ' Text will only be available in English.'
+            )
+            self.putChild(b'gettext.js', MockGetText())
+        self.putChild(b'flag', Flag())
+        self.putChild(b'icons', LookupResource('Icons', rpath('icons')))
+        self.putChild(b'images', LookupResource('Images', rpath('images')))
+        self.putChild(
+            b'ui_images',
+            LookupResource(
+                'UI_Images', common.resource_filename('deluge.ui.data', 'pixmaps')
+            ),
+        )
 
         js = ScriptResource()
 
         # configure the dev scripts
-        js.add_script('ext-base-debug.js', rpath('js', 'extjs', 'ext-base-debug.js'), 'dev')
-        js.add_script('ext-all-debug.js', rpath('js', 'extjs', 'ext-all-debug.js'), 'dev')
-        js.add_script_folder('ext-extensions', rpath('js', 'extjs', 'ext-extensions'), 'dev')
+        js.add_script(
+            'ext-base-debug.js', rpath('js', 'extjs', 'ext-base-debug.js'), 'dev'
+        )
+        js.add_script(
+            'ext-all-debug.js', rpath('js', 'extjs', 'ext-all-debug.js'), 'dev'
+        )
+        js.add_script_folder(
+            'ext-extensions', rpath('js', 'extjs', 'ext-extensions'), 'dev'
+        )
         js.add_script_folder('deluge-all', rpath('js', 'deluge-all'), 'dev')
 
         # configure the debug scripts
-        js.add_script('ext-base-debug.js', rpath('js', 'extjs', 'ext-base-debug.js'), 'debug')
-        js.add_script('ext-all-debug.js', rpath('js', 'extjs', 'ext-all-debug.js'), 'debug')
-        js.add_script('ext-extensions-debug.js', rpath('js', 'extjs', 'ext-extensions-debug.js'), 'debug')
-        js.add_script('deluge-all-debug.js', rpath('js', 'deluge-all-debug.js'), 'debug')
+        js.add_script(
+            'ext-base-debug.js', rpath('js', 'extjs', 'ext-base-debug.js'), 'debug'
+        )
+        js.add_script(
+            'ext-all-debug.js', rpath('js', 'extjs', 'ext-all-debug.js'), 'debug'
+        )
+        js.add_script(
+            'ext-extensions-debug.js',
+            rpath('js', 'extjs', 'ext-extensions-debug.js'),
+            'debug',
+        )
+        js.add_script(
+            'deluge-all-debug.js', rpath('js', 'deluge-all-debug.js'), 'debug'
+        )
 
         # configure the normal scripts
         js.add_script('ext-base.js', rpath('js', 'extjs', 'ext-base.js'))
@@ -452,12 +505,12 @@ class TopLevel(resource.Resource):
         js.add_script('deluge-all.js', rpath('js', 'deluge-all.js'))
 
         self.js = js
-        self.putChild('js', js)
-        self.putChild('json', JSON())
-        self.putChild('upload', Upload())
-        self.putChild('render', Render())
-        self.putChild('themes', static.File(rpath('themes')))
-        self.putChild('tracker', Tracker())
+        self.putChild(b'js', js)
+        self.putChild(b'json', JSON())
+        self.putChild(b'upload', Upload())
+        self.putChild(b'render', Render())
+        self.putChild(b'themes', static.File(rpath('themes')))
+        self.putChild(b'tracker', Tracker())
 
         theme = component.get('DelugeWeb').config['theme']
         if not os.path.isfile(rpath('themes', 'css', 'xtheme-%s.css' % theme)):
@@ -491,14 +544,14 @@ class TopLevel(resource.Resource):
         self.__debug_scripts.remove(script)
 
     def getChild(self, path, request):  # NOQA: N802
-        if path == '':
+        if not path:
             return self
         else:
             return resource.Resource.getChild(self, path, request)
 
     def getChildWithDefault(self, path, request):  # NOQA: N802
         # Calculate the request base
-        header = request.getHeader('x-deluge-base')
+        header = request.getHeader(b'x-deluge-base')
         base = header if header else component.get('DelugeWeb').base
 
         # validate the base parameter
@@ -516,23 +569,38 @@ class TopLevel(resource.Resource):
         return resource.Resource.getChildWithDefault(self, path, request)
 
     def render(self, request):
-        uri_true = ('true', 'yes', '1')
-        debug_arg = request.args.get('debug', [''])[-1] in uri_true
-        dev_arg = request.args.get('dev', [''])[-1] in uri_true
+        uri_true = ('true', 'yes', 'on', '1')
+        uri_false = ('false', 'no', 'off', '0')
+
+        debug_arg = None
+        req_dbg_arg = request.args.get('debug', [b''])[-1].decode().lower()
+        if req_dbg_arg in uri_true:
+            debug_arg = True
+        elif req_dbg_arg in uri_false:
+            debug_arg = False
+
+        dev_arg = request.args.get('dev', [b''])[-1].decode().lower() in uri_true
         dev_ver = 'dev' in common.get_version()
 
         script_type = 'normal'
-        if debug_arg:
-            script_type = 'debug'
-        # Override debug if dev arg or version.
-        if dev_arg or dev_ver:
+        if debug_arg is not None:
+            # Use debug arg to force switching to normal script type.
+            script_type = 'debug' if debug_arg else 'normal'
+        elif dev_arg or dev_ver:
+            # Also use dev files if development version.
             script_type = 'dev'
 
         if not self.js.has_script_type_files(script_type):
             if not dev_ver:
-                log.warning('Failed to enable WebUI "%s" mode, script files are missing!', script_type)
-            # Fallback to checking other types in order and selecting first with files available.
-            for alt_script_type in [x for x in ['normal', 'debug', 'dev'] if x != script_type]:
+                log.warning(
+                    'Failed to enable WebUI "%s" mode, script files are missing!',
+                    script_type,
+                )
+            # Fallback to checking other types in order and selecting first with
+            # files available. Ordered to start with dev files lookup.
+            for alt_script_type in [
+                x for x in ['dev', 'debug', 'normal'] if x != script_type
+            ]:
                 if self.js.has_script_type_files(alt_script_type):
                     script_type = alt_script_type
                     if not dev_ver:
@@ -546,16 +614,20 @@ class TopLevel(resource.Resource):
         request.setHeader(b'content-type', b'text/html; charset=utf-8')
 
         web_config = component.get('Web').get_config()
-        web_config['base'] = request.base
-        config = dict([(key, web_config[key]) for key in UI_CONFIG_KEYS])
+        web_config['base'] = request.base.decode()
+        config = {key: web_config[key] for key in UI_CONFIG_KEYS}
         js_config = json.dumps(config)
         # Insert the values into 'index.html' and return.
-        return template.render(scripts=scripts, stylesheets=self.stylesheets,
-                               debug=debug_arg, base=request.base, js_config=js_config)
+        return template.render(
+            scripts=scripts,
+            stylesheets=self.stylesheets,
+            debug=str(bool(debug_arg)).lower(),
+            base=web_config['base'],
+            js_config=js_config,
+        )
 
 
 class DelugeWeb(component.Component):
-
     def __init__(self, options=None, daemon=True):
         """
         Setup the DelugeWeb server.
@@ -567,7 +639,9 @@ class DelugeWeb(component.Component):
 
         """
         component.Component.__init__(self, 'DelugeWeb', depend=['Web'])
-        self.config = configmanager.ConfigManager('web.conf', defaults=CONFIG_DEFAULTS, file_version=2)
+        self.config = configmanager.ConfigManager(
+            'web.conf', defaults=CONFIG_DEFAULTS, file_version=2
+        )
         self.config.run_converter((0, 1), 2, self._migrate_config_1_to_2)
         self.config.register_set_function('language', self._on_language_changed)
         self.socket = None
@@ -581,7 +655,9 @@ class DelugeWeb(component.Component):
         self.base = self.config['base']
 
         if options:
-            self.interface = options.interface if options.interface is not None else self.interface
+            self.interface = (
+                options.interface if options.interface is not None else self.interface
+            )
             self.port = options.port if options.port else self.port
             self.base = options.base if options.base else self.base
             if options.ssl:
@@ -593,8 +669,10 @@ class DelugeWeb(component.Component):
             # Strip away slashes and serve on the base path as well as root path
             self.top_level.putChild(self.base.strip('/'), self.top_level)
 
-        setup_translations(setup_gettext=True, setup_pygtk=False)
+        setup_translations()
 
+        # Remove twisted version number from 'server' http-header for security reasons
+        server.version = 'TwistedWeb'
         self.site = server.Site(self.top_level)
         self.web_api = WebApi()
         self.web_utils = WebUtils()
@@ -621,10 +699,10 @@ class DelugeWeb(component.Component):
 
             def win_handler(ctrl_type):
                 log.debug('ctrl type: %s', ctrl_type)
-                if ctrl_type == CTRL_CLOSE_EVENT or \
-                   ctrl_type == CTRL_SHUTDOWN_EVENT:
+                if ctrl_type == CTRL_CLOSE_EVENT or ctrl_type == CTRL_SHUTDOWN_EVENT:
                     self.shutdown()
                     return 1
+
             SetConsoleCtrlHandler(win_handler)
 
     def start(self):
@@ -632,7 +710,7 @@ class DelugeWeb(component.Component):
         Start the DelugeWeb server
         """
         if self.socket:
-            log.warn('DelugeWeb is already running and cannot be started')
+            log.warning('DelugeWeb is already running and cannot be started')
             return
 
         log.info('Starting webui server at PID %s', os.getpid())
@@ -656,16 +734,15 @@ class DelugeWeb(component.Component):
         check_ssl_keys()
         log.debug('Enabling SSL with PKey: %s, Cert: %s', self.pkey, self.cert)
 
-        with open(configmanager.get_config_dir(self.cert)) as cert:
-            certificate = Certificate.loadPEM(cert.read()).original
-        with open(configmanager.get_config_dir(self.pkey)) as pkey:
-            private_key = KeyPair.load(pkey.read(), FILETYPE_PEM).original
-        options = CertificateOptions(privateKey=private_key, certificate=certificate, method=SSL.SSLv23_METHOD)
-        ctx = options.getContext()
-        ctx.set_options(SSL.OP_NO_SSLv2 | SSL.OP_NO_SSLv3)
-        ctx.use_certificate_chain_file(configmanager.get_config_dir(self.cert))
+        cert = configmanager.get_config_dir(self.cert)
+        pkey = configmanager.get_config_dir(self.pkey)
 
-        self.socket = reactor.listenSSL(self.port, self.site, options, interface=self.interface)
+        self.socket = reactor.listenSSL(
+            self.port,
+            self.site,
+            get_context_factory(cert, pkey),
+            interface=self.interface,
+        )
         ip = self.socket.getHost().host
         ip = '[%s]' % ip if is_ipv6(ip) else ip
         log.info('Serving at https://%s:%s%s', ip, self.port, self.base)

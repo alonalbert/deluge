@@ -18,18 +18,23 @@ import tempfile
 import threading
 from base64 import b64decode, b64encode
 
+from six import string_types
 from twisted.internet import defer, reactor, task
-from twisted.web.client import getPage
+from twisted.web.client import Agent, readBody
 
 import deluge.common
 import deluge.component as component
 from deluge import path_chooser_common
 from deluge._libtorrent import LT_VERSION, lt
-from deluge.common import PY2
 from deluge.configmanager import ConfigManager, get_config_dir
 from deluge.core.alertmanager import AlertManager
-from deluge.core.authmanager import (AUTH_LEVEL_ADMIN, AUTH_LEVEL_NONE, AUTH_LEVELS_MAPPING,
-                                     AUTH_LEVELS_MAPPING_REVERSE, AuthManager)
+from deluge.core.authmanager import (
+    AUTH_LEVEL_ADMIN,
+    AUTH_LEVEL_NONE,
+    AUTH_LEVELS_MAPPING,
+    AUTH_LEVELS_MAPPING_REVERSE,
+    AuthManager,
+)
 from deluge.core.eventmanager import EventManager
 from deluge.core.filtermanager import FilterManager
 from deluge.core.pluginmanager import PluginManager
@@ -37,8 +42,18 @@ from deluge.core.preferencesmanager import PreferencesManager
 from deluge.core.rpcserver import export
 from deluge.core.torrentmanager import TorrentManager
 from deluge.decorators import deprecated
-from deluge.error import AddTorrentError, DelugeError, InvalidPathError, InvalidTorrentError
-from deluge.event import NewVersionAvailableEvent, SessionPausedEvent, SessionResumedEvent, TorrentQueueChangedEvent
+from deluge.error import (
+    AddTorrentError,
+    DelugeError,
+    InvalidPathError,
+    InvalidTorrentError,
+)
+from deluge.event import (
+    NewVersionAvailableEvent,
+    SessionPausedEvent,
+    SessionResumedEvent,
+    TorrentQueueChangedEvent,
+)
 from deluge.httpdownloader import download_file
 
 try:
@@ -49,7 +64,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-OLD_SESSION_STATUS_KEYS = {
+DEPR_SESSION_STATUS_KEYS = {
     # 'active_requests': None, # In dht_stats_alert, if required.
     'allowed_upload_slots': 'ses.num_unchoke_slots',
     # 'dht_global_nodes': None,
@@ -81,9 +96,7 @@ OLD_SESSION_STATUS_KEYS = {
     # 'utp_stats': None
 }
 
-# TODO: replace with dynamic rate e.g.
-# 'dht.dht_bytes_in'.replace('_bytes', '') + '_rate'
-# would become 'dht.dht_in_rate'
+# Session status rate keys associated with session status counters.
 SESSION_RATES_MAPPING = {
     'dht_download_rate': 'dht.dht_bytes_in',
     'dht_upload_rate': 'dht.dht_bytes_out',
@@ -101,15 +114,15 @@ DELUGE_VER = deluge.common.get_version()
 
 
 class Core(component.Component):
-    def __init__(self, listen_interface=None, read_only_config_keys=None):
+    def __init__(
+        self, listen_interface=None, outgoing_interface=None, read_only_config_keys=None
+    ):
         component.Component.__init__(self, 'Core')
 
         # Start the libtorrent session.
         user_agent = 'Deluge/{} libtorrent/{}'.format(DELUGE_VER, LT_VERSION)
         peer_id = self._create_peer_id(DELUGE_VER)
-        log.debug(
-            'Starting session (peer_id: %s, user_agent: %s)',
-            peer_id, user_agent)
+        log.debug('Starting session (peer_id: %s, user_agent: %s)', peer_id, user_agent)
         settings_pack = {
             'peer_fingerprint': peer_id,
             'user_agent': user_agent,
@@ -140,7 +153,9 @@ class Core(component.Component):
 
         # External IP Address from libtorrent
         self.external_ip = None
-        self.eventmanager.register_event_handler('ExternalIPEvent', self._on_external_ip_event)
+        self.eventmanager.register_event_handler(
+            'ExternalIPEvent', self._on_external_ip_event
+        )
 
         # GeoIP instance with db loaded
         self.geoip_instance = None
@@ -156,23 +171,38 @@ class Core(component.Component):
 
         # If there was an interface value from the command line, use it, but
         # store the one in the config so we can restore it on shutdown
-        self.__old_interface = None
+        self._old_listen_interface = None
         if listen_interface:
             if deluge.common.is_ip(listen_interface):
-                self.__old_interface = self.config['listen_interface']
+                self._old_listen_interface = self.config['listen_interface']
                 self.config['listen_interface'] = listen_interface
             else:
-                log.error('Invalid listen interface (must be IP Address): %s', listen_interface)
+                log.error(
+                    'Invalid listen interface (must be IP Address): %s',
+                    listen_interface,
+                )
+
+        self._old_outgoing_interface = None
+        if outgoing_interface:
+            self._old_outgoing_interface = self.config['outgoing_interface']
+            self.config['outgoing_interface'] = outgoing_interface
 
         # New release check information
         self.__new_release = None
 
         # Session status timer
-        self.session_status = {}
+        self.session_status = {k.name: 0 for k in lt.session_stats_metrics()}
+        self._session_prev_bytes = {k: 0 for k in SESSION_RATES_MAPPING}
+        # Initiate other session status keys.
+        self.session_status.update(self._session_prev_bytes)
+        hit_ratio_keys = ['write_hit_ratio', 'read_hit_ratio']
+        self.session_status.update({k: 0.0 for k in hit_ratio_keys})
+
         self.session_status_timer_interval = 0.5
         self.session_status_timer = task.LoopingCall(self.session.post_session_stats)
-        self.alertmanager.register_handler('session_stats_alert', self._on_alert_session_stats)
-        self._session_rates = {(k_rate, k_bytes): 0 for k_rate, k_bytes in SESSION_RATES_MAPPING.items()}
+        self.alertmanager.register_handler(
+            'session_stats_alert', self._on_alert_session_stats
+        )
         self.session_rates_timer_interval = 2
         self.session_rates_timer = task.LoopingCall(self._update_session_rates)
 
@@ -194,8 +224,11 @@ class Core(component.Component):
         self._save_session_state()
 
         # We stored a copy of the old interface value
-        if self.__old_interface:
-            self.config['listen_interface'] = self.__old_interface
+        if self._old_listen_interface is not None:
+            self.config['listen_interface'] = self._old_listen_interface
+
+        if self._old_outgoing_interface is not None:
+            self.config['outgoing_interface'] = self._old_outgoing_interface
 
         # Make sure the config file has been saved
         self.config.save()
@@ -244,7 +277,7 @@ class Core(component.Component):
 
         def substitute_chr(string, idx, char):
             """Fast substitute single char in string."""
-            return string[:idx] + char + string[idx + 1:]
+            return string[:idx] + char + string[idx + 1 :]
 
         if split.dev:
             release_chr = 'D'
@@ -308,53 +341,64 @@ class Core(component.Component):
 
     def _on_alert_session_stats(self, alert):
         """The handler for libtorrent session stats alert"""
-        if not self.session_status:
-            # Empty dict on startup so needs populated with session rate keys and default value.
-            self.session_status.update({key: 0 for key in list(SESSION_RATES_MAPPING)})
         self.session_status.update(alert.values)
         self._update_session_cache_hit_ratio()
 
     def _update_session_cache_hit_ratio(self):
-        """Calculates the cache read/write hit ratios and updates session_status"""
-        try:
-            self.session_status['write_hit_ratio'] = ((self.session_status['disk.num_blocks_written'] -
-                                                       self.session_status['disk.num_write_ops']) /
-                                                      self.session_status['disk.num_blocks_written'])
-        except ZeroDivisionError:
+        """Calculates the cache read/write hit ratios for session_status."""
+        blocks_written = self.session_status['disk.num_blocks_written']
+        blocks_read = self.session_status['disk.num_blocks_read']
+
+        if blocks_written:
+            self.session_status['write_hit_ratio'] = (
+                blocks_written - self.session_status['disk.num_write_ops']
+            ) / blocks_written
+        else:
             self.session_status['write_hit_ratio'] = 0.0
 
-        try:
-            self.session_status['read_hit_ratio'] = (self.session_status['disk.num_blocks_cache_hits'] /
-                                                     self.session_status['disk.num_blocks_read'])
-        except ZeroDivisionError:
+        if blocks_read:
+            self.session_status['read_hit_ratio'] = (
+                self.session_status['disk.num_blocks_cache_hits'] / blocks_read
+            )
+        else:
             self.session_status['read_hit_ratio'] = 0.0
 
     def _update_session_rates(self):
-        """Calculates status rates based on interval and value difference for session_status"""
-        if not self.session_status:
-            return
+        """Calculate session status rates.
 
-        for (rate_key, status_key), prev_bytes in list(self._session_rates.items()):
-            new_bytes = self.session_status[status_key]
-            byte_rate = (new_bytes - prev_bytes) / self.session_rates_timer_interval
-            self.session_status[rate_key] = byte_rate
+        Uses polling interval and counter difference for session_status rates.
+        """
+        for rate_key, prev_bytes in list(self._session_prev_bytes.items()):
+            new_bytes = self.session_status[SESSION_RATES_MAPPING[rate_key]]
+            self.session_status[rate_key] = (
+                new_bytes - prev_bytes
+            ) / self.session_rates_timer_interval
             # Store current value for next update.
-            self._session_rates[(rate_key, status_key)] = new_bytes
+            self._session_prev_bytes[rate_key] = new_bytes
 
     def get_new_release(self):
         log.debug('get_new_release')
         try:
-            self.new_release = urlopen('http://download.deluge-torrent.org/version-2.0').read().strip()
+            self.new_release = (
+                urlopen('http://download.deluge-torrent.org/version-2.0')
+                .read()
+                .decode()
+                .strip()
+            )
         except URLError as ex:
             log.debug('Unable to get release info from website: %s', ex)
-            return
-        self.check_new_release()
+        else:
+            self.check_new_release()
 
     def check_new_release(self):
         if self.new_release:
             log.debug('new_release: %s', self.new_release)
-            if deluge.common.VersionSplit(self.new_release) > deluge.common.VersionSplit(deluge.common.get_version()):
-                component.get('EventManager').emit(NewVersionAvailableEvent(self.new_release))
+            if deluge.common.VersionSplit(
+                self.new_release
+            ) > deluge.common.VersionSplit(deluge.common.get_version()):
+                component.get('EventManager').emit(
+                    NewVersionAvailableEvent(self.new_release)
+                )
                 return self.new_release
         return False
 
@@ -375,18 +419,47 @@ class Core(component.Component):
         """
         try:
             filedump = b64decode(filedump)
-        except Exception as ex:
+        except TypeError as ex:
             log.error('There was an error decoding the filedump string: %s', ex)
 
         try:
             d = self.torrentmanager.add_async(
-                filedump=filedump, options=options, filename=filename, save_state=save_state
+                filedump=filedump,
+                options=options,
+                filename=filename,
+                save_state=save_state,
             )
         except RuntimeError as ex:
             log.error('There was an error adding the torrent file %s: %s', filename, ex)
             raise
         else:
             return d
+
+    @export
+    def prefetch_magnet_metadata(self, magnet, timeout=30):
+        """Download the metadata for the magnet uri without adding torrent to deluge session.
+
+        Args:
+            magnet (str): The magnet uri.
+            timeout (int): Time to wait to recieve metadata from peers.
+
+        Returns:
+            Deferred: A tuple of (torrent_id (str), metadata (bytes)) for the magnet.
+
+            The metadata is base64 encoded.
+
+        """
+
+        def on_metadata(result, result_d):
+            torrent_id, metadata = result
+            result_d.callback((torrent_id, b64encode(metadata)))
+            return result
+
+        d = self.torrentmanager.prefetch_metadata(magnet, timeout)
+        # Use a seperate callback chain to handle existing prefetching magnet.
+        result_d = defer.Deferred()
+        d.addBoth(on_metadata, result_d)
+        return result_d
 
     @export
     def add_torrent_file(self, filename, filedump, options):
@@ -399,7 +472,6 @@ class Core(component.Component):
 
         Returns:
             str: The torrent_id or None.
-
         """
         try:
             filedump = b64decode(filedump)
@@ -408,7 +480,8 @@ class Core(component.Component):
 
         try:
             return self.torrentmanager.add(
-                filedump=filedump, options=options, filename=filename)
+                filedump=filedump, options=options, filename=filename
+            )
         except RuntimeError as ex:
             log.error('There was an error adding the torrent file %s: %s', filename, ex)
             raise
@@ -424,6 +497,7 @@ class Core(component.Component):
             Deferred
 
         """
+
         @defer.inlineCallbacks
         def add_torrents():
             errors = []
@@ -431,11 +505,13 @@ class Core(component.Component):
             for idx, torrent in enumerate(torrent_files):
                 try:
                     yield self.add_torrent_file_async(
-                        torrent[0], torrent[1], torrent[2], save_state=idx == last_index)
+                        torrent[0], torrent[1], torrent[2], save_state=idx == last_index
+                    )
                 except AddTorrentError as ex:
-                    log.warn('Error when adding torrent: %s', ex)
+                    log.warning('Error when adding torrent: %s', ex)
                     errors.append(ex)
             defer.returnValue(errors)
+
         return task.deferLater(reactor, 0, add_torrents)
 
     @export
@@ -533,14 +609,19 @@ class Core(component.Component):
             errors = []
             for torrent_id in torrent_ids:
                 try:
-                    self.torrentmanager.remove(torrent_id, remove_data=remove_data, save_state=False)
+                    self.torrentmanager.remove(
+                        torrent_id, remove_data=remove_data, save_state=False
+                    )
                 except InvalidTorrentError as ex:
                     errors.append((torrent_id, str(ex)))
             # Save the session state
             self.torrentmanager.save_state()
             if errors:
-                log.warn('Failed to remove %d of %d torrents.', len(errors), len(torrent_ids))
+                log.warning(
+                    'Failed to remove %d of %d torrents.', len(errors), len(torrent_ids)
+                )
             return errors
+
         return task.deferLater(reactor, 0, do_remove_torrents)
 
     @export
@@ -556,24 +637,22 @@ class Core(component.Component):
         :rtype: dict
 
         """
-
-        if not self.session_status:
-            return {key: 0 for key in keys}
-
         if not keys:
             return self.session_status
 
         status = {}
         for key in keys:
-            if key in OLD_SESSION_STATUS_KEYS:
-                new_key = OLD_SESSION_STATUS_KEYS[key]
-                log.warning('Using deprecated session status key %s, please use %s', key, new_key)
-                status[key] = self.session_status[new_key]
-            else:
-                try:
-                    status[key] = self.session_status[key]
-                except KeyError:
-                    log.warning('Session status key does not exist: %s', key)
+            try:
+                status[key] = self.session_status[key]
+            except KeyError:
+                if key in DEPR_SESSION_STATUS_KEYS:
+                    new_key = DEPR_SESSION_STATUS_KEYS[key]
+                    log.debug(
+                        'Deprecated session status key %s, please use %s', key, new_key
+                    )
+                    status[key] = self.session_status[new_key]
+                else:
+                    log.warning('Session status key not valid: %s', key)
         return status
 
     @export
@@ -583,11 +662,21 @@ class Core(component.Component):
             self.torrentmanager[torrent_id].force_reannounce()
 
     @export
-    def pause_torrent(self, torrent_ids):
-        log.debug('Pausing: %s', torrent_ids)
+    def pause_torrent(self, torrent_id):
+        """Pauses a torrent"""
+        log.debug('Pausing: %s', torrent_id)
+        if not isinstance(torrent_id, string_types):
+            self.pause_torrents(torrent_id)
+        else:
+            self.torrentmanager[torrent_id].pause()
+
+    @export
+    def pause_torrents(self, torrent_ids=None):
+        """Pauses a list of torrents"""
+        if not torrent_ids:
+            torrent_ids = self.torrentmanager.get_torrent_list()
         for torrent_id in torrent_ids:
-            if not self.torrentmanager[torrent_id].pause():
-                log.warning('Error pausing torrent %s', torrent_id)
+            self.pause_torrent(torrent_id)
 
     @export
     def connect_peer(self, torrent_id, ip, port):
@@ -604,14 +693,14 @@ class Core(component.Component):
 
     @export
     def pause_session(self):
-        """Pause all torrents in the session"""
+        """Pause the entire session"""
         if not self.session.is_paused():
             self.session.pause()
             component.get('EventManager').emit(SessionPausedEvent())
 
     @export
     def resume_session(self):
-        """Resume all torrents in the session"""
+        """Resume the entire session"""
         if self.session.is_paused():
             self.session.resume()
             for torrent_id in self.torrentmanager.torrents:
@@ -619,16 +708,43 @@ class Core(component.Component):
             component.get('EventManager').emit(SessionResumedEvent())
 
     @export
-    def resume_torrent(self, torrent_ids):
-        log.debug('Resuming: %s', torrent_ids)
-        for torrent_id in torrent_ids:
+    def is_session_paused(self):
+        """Returns the activity of the session"""
+        return self.session.is_paused()
+
+    @export
+    def resume_torrent(self, torrent_id):
+        """Resumes a torrent"""
+        log.debug('Resuming: %s', torrent_id)
+        if not isinstance(torrent_id, string_types):
+            self.resume_torrents(torrent_id)
+        else:
             self.torrentmanager[torrent_id].resume()
 
-    def create_torrent_status(self, torrent_id, torrent_keys, plugin_keys, diff=False, update=False, all_keys=False):
+    @export
+    def resume_torrents(self, torrent_ids=None):
+        """Resumes a list of torrents"""
+        if not torrent_ids:
+            torrent_ids = self.torrentmanager.get_torrent_list()
+        for torrent_id in torrent_ids:
+            self.resume_torrent(torrent_id)
+
+    def create_torrent_status(
+        self,
+        torrent_id,
+        torrent_keys,
+        plugin_keys,
+        diff=False,
+        update=False,
+        all_keys=False,
+    ):
         try:
-            status = self.torrentmanager[torrent_id].get_status(torrent_keys, diff, update=update, all_keys=all_keys)
+            status = self.torrentmanager[torrent_id].get_status(
+                torrent_keys, diff, update=update, all_keys=all_keys
+            )
         except KeyError:
             import traceback
+
             traceback.print_exc()
             # Torrent was probaly removed meanwhile
             return {}
@@ -640,9 +756,17 @@ class Core(component.Component):
 
     @export
     def get_torrent_status(self, torrent_id, keys, diff=False):
-        torrent_keys, plugin_keys = self.torrentmanager.separate_keys(keys, [torrent_id])
-        return self.create_torrent_status(torrent_id, torrent_keys, plugin_keys, diff=diff, update=True,
-                                          all_keys=not keys)
+        torrent_keys, plugin_keys = self.torrentmanager.separate_keys(
+            keys, [torrent_id]
+        )
+        return self.create_torrent_status(
+            torrent_id,
+            torrent_keys,
+            plugin_keys,
+            diff=diff,
+            update=True,
+            all_keys=not keys,
+        )
 
     @export
     def get_torrents_status(self, filter_dict, keys, diff=False):
@@ -657,8 +781,11 @@ class Core(component.Component):
             # Ask the plugin manager to fill in the plugin keys
             if len(plugin_keys) > 0:
                 for key in status_dict:
-                    status_dict[key].update(self.pluginmanager.get_status(key, plugin_keys))
+                    status_dict[key].update(
+                        self.pluginmanager.get_status(key, plugin_keys)
+                    )
             return status_dict
+
         d.addCallback(add_plugin_fields)
         return d
 
@@ -689,7 +816,7 @@ class Core(component.Component):
     @export
     def get_config_values(self, keys):
         """Get the config values for the entered keys"""
-        return dict((key, self.config.get(key)) for key in keys)
+        return {key: self.config.get(key) for key in keys}
 
     @export
     def set_config(self, config):
@@ -720,7 +847,9 @@ class Core(component.Component):
 
         settings = self.session.get_settings()
         proxy_type = settings['proxy_type']
-        proxy_hostname = settings['i2p_hostname'] if proxy_type == 6 else settings['proxy_hostname']
+        proxy_hostname = (
+            settings['i2p_hostname'] if proxy_type == 6 else settings['proxy_hostname']
+        )
         proxy_port = settings['i2p_port'] if proxy_type == 6 else settings['proxy_port']
         proxy_dict = {
             'type': proxy_type,
@@ -730,7 +859,7 @@ class Core(component.Component):
             'port': proxy_port,
             'proxy_hostnames': settings['proxy_hostnames'],
             'proxy_peer_connections': settings['proxy_peer_connections'],
-            'proxy_tracker_connections': settings['proxy_tracker_connections']
+            'proxy_tracker_connections': settings['proxy_tracker_connections'],
         }
 
         return proxy_dict
@@ -770,7 +899,7 @@ class Core(component.Component):
         if 'owner' in options and not self.authmanager.has_account(options['owner']):
             raise DelugeError('Username "%s" is not known.' % options['owner'])
 
-        if isinstance(torrent_ids, str if not PY2 else basestring):
+        if isinstance(torrent_ids, string_types):
             torrent_ids = [torrent_ids]
 
         for torrent_id in torrent_ids:
@@ -860,26 +989,52 @@ class Core(component.Component):
         return deluge.common.get_path_size(path)
 
     @export
-    def create_torrent(self, path, tracker, piece_length, comment, target,
-                       webseeds, private, created_by, trackers, add_to_session):
+    def create_torrent(
+        self,
+        path,
+        tracker,
+        piece_length,
+        comment,
+        target,
+        webseeds,
+        private,
+        created_by,
+        trackers,
+        add_to_session,
+    ):
 
         log.debug('creating torrent..')
-        threading.Thread(target=self._create_torrent_thread,
-                         args=(
-                             path,
-                             tracker,
-                             piece_length,
-                             comment,
-                             target,
-                             webseeds,
-                             private,
-                             created_by,
-                             trackers,
-                             add_to_session)).start()
+        threading.Thread(
+            target=self._create_torrent_thread,
+            args=(
+                path,
+                tracker,
+                piece_length,
+                comment,
+                target,
+                webseeds,
+                private,
+                created_by,
+                trackers,
+                add_to_session,
+            ),
+        ).start()
 
-    def _create_torrent_thread(self, path, tracker, piece_length, comment, target,
-                               webseeds, private, created_by, trackers, add_to_session):
+    def _create_torrent_thread(
+        self,
+        path,
+        tracker,
+        piece_length,
+        comment,
+        target,
+        webseeds,
+        private,
+        created_by,
+        trackers,
+        add_to_session,
+    ):
         from deluge import metafile
+
         metafile.make_meta_file(
             path,
             tracker,
@@ -889,7 +1044,8 @@ class Core(component.Component):
             webseeds=webseeds,
             private=private,
             created_by=created_by,
-            trackers=trackers)
+            trackers=trackers,
+        )
         log.debug('torrent created!')
         if add_to_session:
             options = {}
@@ -907,7 +1063,7 @@ class Core(component.Component):
 
         try:
             filedump = b64decode(filedump)
-        except Exception as ex:
+        except TypeError as ex:
             log.error('There was an error decoding the filedump string!')
             log.exception(ex)
             return
@@ -972,7 +1128,9 @@ class Core(component.Component):
     def queue_top(self, torrent_ids):
         log.debug('Attempting to queue %s to top', torrent_ids)
         # torrent_ids must be sorted in reverse before moving to preserve order
-        for torrent_id in sorted(torrent_ids, key=self.torrentmanager.get_queue_position, reverse=True):
+        for torrent_id in sorted(
+            torrent_ids, key=self.torrentmanager.get_queue_position, reverse=True
+        ):
             try:
                 # If the queue method returns True, then we should emit a signal
                 if self.torrentmanager.queue_top(torrent_id):
@@ -983,7 +1141,10 @@ class Core(component.Component):
     @export
     def queue_up(self, torrent_ids):
         log.debug('Attempting to queue %s to up', torrent_ids)
-        torrents = ((self.torrentmanager.get_queue_position(torrent_id), torrent_id) for torrent_id in torrent_ids)
+        torrents = (
+            (self.torrentmanager.get_queue_position(torrent_id), torrent_id)
+            for torrent_id in torrent_ids
+        )
         torrent_moved = True
         prev_queue_position = None
         # torrent_ids must be sorted before moving.
@@ -993,7 +1154,9 @@ class Core(component.Component):
                 try:
                     torrent_moved = self.torrentmanager.queue_up(torrent_id)
                 except KeyError:
-                    log.warning('torrent_id: %s does not exist in the queue', torrent_id)
+                    log.warning(
+                        'torrent_id: %s does not exist in the queue', torrent_id
+                    )
             # If the torrent moved, then we should emit a signal
             if torrent_moved:
                 component.get('EventManager').emit(TorrentQueueChangedEvent())
@@ -1003,7 +1166,10 @@ class Core(component.Component):
     @export
     def queue_down(self, torrent_ids):
         log.debug('Attempting to queue %s to down', torrent_ids)
-        torrents = ((self.torrentmanager.get_queue_position(torrent_id), torrent_id) for torrent_id in torrent_ids)
+        torrents = (
+            (self.torrentmanager.get_queue_position(torrent_id), torrent_id)
+            for torrent_id in torrent_ids
+        )
         torrent_moved = True
         prev_queue_position = None
         # torrent_ids must be sorted before moving.
@@ -1013,7 +1179,9 @@ class Core(component.Component):
                 try:
                     torrent_moved = self.torrentmanager.queue_down(torrent_id)
                 except KeyError:
-                    log.warning('torrent_id: %s does not exist in the queue', torrent_id)
+                    log.warning(
+                        'torrent_id: %s does not exist in the queue', torrent_id
+                    )
             # If the torrent moved, then we should emit a signal
             if torrent_moved:
                 component.get('EventManager').emit(TorrentQueueChangedEvent())
@@ -1024,7 +1192,9 @@ class Core(component.Component):
     def queue_bottom(self, torrent_ids):
         log.debug('Attempting to queue %s to bottom', torrent_ids)
         # torrent_ids must be sorted before moving to preserve order
-        for torrent_id in sorted(torrent_ids, key=self.torrentmanager.get_queue_position):
+        for torrent_id in sorted(
+            torrent_ids, key=self.torrentmanager.get_queue_position
+        ):
             try:
                 # If the queue method returns True, then we should emit a signal
                 if self.torrentmanager.queue_bottom(torrent_id):
@@ -1045,16 +1215,18 @@ class Core(component.Component):
         :rtype: bool
 
         """
-        d = getPage(b'http://deluge-torrent.org/test_port.php?port=%s' %
-                    self.get_listen_port(), timeout=30)
+        port = self.get_listen_port()
+        url = 'https://deluge-torrent.org/test_port.php?port=%s' % port
+        agent = Agent(reactor, connectTimeout=30)
+        d = agent.request(b'GET', url.encode())
 
-        def on_get_page(result):
-            return bool(int(result))
+        def on_get_page(body):
+            return bool(int(body))
 
         def on_error(failure):
             log.warning('Error testing listen port: %s', failure)
 
-        d.addCallback(on_get_page)
+        d.addCallback(readBody).addCallback(on_get_page)
         d.addErrback(on_error)
 
         return d

@@ -1,19 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated with glade 3.22.1 -->
 <interface>
-  <requires lib="gtk+" version="2.24"/>
-  <!-- interface-naming-policy project-wide -->
+  <requires lib="gtk+" version="3.0"/>
   <object class="GtkListStore" id="liststore1">
     <columns>
-      <!-- column-name item text -->
+      <!-- column-name item -->
       <column type="gchararray"/>
     </columns>
   </object>
   <object class="GtkWindow" id="execute_window">
     <property name="can_focus">False</property>
     <child>
-      <object class="GtkVBox" id="execute_box">
+      <placeholder/>
+    </child>
+    <child>
+      <object class="GtkBox" id="execute_box">
         <property name="visible">True</property>
         <property name="can_focus">False</property>
+        <property name="orientation">vertical</property>
         <child>
           <object class="GtkFrame" id="add_frame">
             <property name="visible">True</property>
@@ -26,6 +30,7 @@
                 <property name="can_focus">False</property>
                 <property name="top_padding">5</property>
                 <property name="left_padding">12</property>
+                <property name="right_padding">10</property>
                 <child>
                   <object class="GtkTable" id="add_table">
                     <property name="visible">True</property>
@@ -36,8 +41,8 @@
                       <object class="GtkLabel" id="event_label">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
-                        <property name="xalign">0</property>
                         <property name="label" translatable="yes">Event</property>
+                        <property name="xalign">0</property>
                       </object>
                       <packing>
                         <property name="x_options">GTK_FILL</property>
@@ -49,8 +54,8 @@
                       <object class="GtkLabel" id="command_label">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
-                        <property name="xalign">0</property>
                         <property name="label" translatable="yes">Command</property>
+                        <property name="xalign">0</property>
                       </object>
                       <packing>
                         <property name="top_attach">1</property>
@@ -68,8 +73,6 @@
                         <property name="has_default">True</property>
                         <property name="primary_icon_activatable">False</property>
                         <property name="secondary_icon_activatable">False</property>
-                        <property name="primary_icon_sensitive">True</property>
-                        <property name="secondary_icon_sensitive">True</property>
                       </object>
                       <packing>
                         <property name="left_attach">1</property>
@@ -83,6 +86,7 @@
                       <object class="GtkComboBox" id="event_combobox">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
+                        <property name="halign">start</property>
                         <property name="model">liststore1</property>
                         <child>
                           <object class="GtkCellRendererText" id="cellrenderertext1"/>
@@ -101,6 +105,7 @@
                       <object class="GtkHButtonBox" id="hbuttonbox1">
                         <property name="visible">True</property>
                         <property name="can_focus">False</property>
+                        <property name="halign">center</property>
                         <property name="layout_style">end</property>
                         <child>
                           <object class="GtkButton" id="button_add">
@@ -158,10 +163,12 @@
                 <property name="top_padding">5</property>
                 <property name="left_padding">12</property>
                 <child>
-                  <object class="GtkVBox" id="commands_vbox">
+                  <object class="GtkBox" id="commands_vbox">
                     <property name="visible">True</property>
                     <property name="can_focus">False</property>
                     <property name="events">GDK_POINTER_MOTION_MASK | GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK</property>
+                    <property name="halign">start</property>
+                    <property name="orientation">vertical</property>
                     <child>
                       <placeholder/>
                     </child>

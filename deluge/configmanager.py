@@ -94,9 +94,12 @@ class _ConfigManager(object):
         log.debug('Getting config: %s', config_file)
         # Create the config object if not already created
         if config_file not in self.config_files:
-            self.config_files[config_file] = Config(config_file, defaults,
-                                                    config_dir=self.config_directory,
-                                                    file_version=file_version)
+            self.config_files[config_file] = Config(
+                config_file,
+                defaults,
+                config_dir=self.config_directory,
+                file_version=file_version,
+            )
 
         return self.config_files[config_file]
 
@@ -106,7 +109,9 @@ _configmanager = _ConfigManager()
 
 
 def ConfigManager(config, defaults=None, file_version=1):  # NOQA: N802
-    return _configmanager.get_config(config, defaults=defaults, file_version=file_version)
+    return _configmanager.get_config(
+        config, defaults=defaults, file_version=file_version
+    )
 
 
 def set_config_dir(directory):

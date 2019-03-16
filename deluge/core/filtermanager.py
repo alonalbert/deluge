@@ -11,8 +11,10 @@ from __future__ import unicode_literals
 
 import logging
 
+from six import string_types
+
 import deluge.component as component
-from deluge.common import PY2, TORRENT_STATE
+from deluge.common import TORRENT_STATE
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +103,7 @@ class FilterManager(component.Component):
     """FilterManager
 
     """
+
     def __init__(self, core):
         component.Component.__init__(self, 'FilterManager')
         log.debug('FilterManager init..')
@@ -115,12 +118,14 @@ class FilterManager(component.Component):
 
         def _init_tracker_tree():
             return {'Error': 0}
+
         self.register_tree_field('tracker_host', _init_tracker_tree)
 
         self.register_filter('tracker_host', tracker_error_filter)
 
         def _init_users_tree():
             return {'': 0}
+
         self.register_tree_field('owner', _init_users_tree)
 
     def filter_torrent_ids(self, filter_dict):
@@ -133,7 +138,7 @@ class FilterManager(component.Component):
 
         # Sanitize input: filter-value must be a list of strings
         for key, value in filter_dict.items():
-            if isinstance(value, str if not PY2 else basestring):
+            if isinstance(value, string_types):
                 filter_dict[key] = [value]
 
         # Optimized filter for id
@@ -162,19 +167,25 @@ class FilterManager(component.Component):
             return torrent_ids
 
         # Registered filters
-        for field, values in filter_dict.items():
+        for field, values in list(filter_dict.items()):
             if field in self.registered_filters:
                 # Filters out doubles
-                torrent_ids = list(set(self.registered_filters[field](torrent_ids, values)))
+                torrent_ids = list(
+                    set(self.registered_filters[field](torrent_ids, values))
+                )
                 del filter_dict[field]
 
         if not filter_dict:
             return torrent_ids
 
-        torrent_keys, plugin_keys = self.torrents.separate_keys(list(filter_dict), torrent_ids)
+        torrent_keys, plugin_keys = self.torrents.separate_keys(
+            list(filter_dict), torrent_ids
+        )
         # Leftover filter arguments, default filter on status fields.
         for torrent_id in list(torrent_ids):
-            status = self.core.create_torrent_status(torrent_id, torrent_keys, plugin_keys)
+            status = self.core.create_torrent_status(
+                torrent_id, torrent_keys, plugin_keys
+            )
             for field, values in filter_dict.items():
                 if field in status and status[field] in values:
                     continue
@@ -194,17 +205,21 @@ class FilterManager(component.Component):
                 tree_keys.remove(cat)
 
         torrent_keys, plugin_keys = self.torrents.separate_keys(tree_keys, torrent_ids)
-        items = dict((field, self.tree_fields[field]()) for field in tree_keys)
+        items = {field: self.tree_fields[field]() for field in tree_keys}
 
         for torrent_id in list(torrent_ids):
-            status = self.core.create_torrent_status(torrent_id, torrent_keys, plugin_keys)  # status={key:value}
+            status = self.core.create_torrent_status(
+                torrent_id, torrent_keys, plugin_keys
+            )  # status={key:value}
             for field in tree_keys:
                 value = status[field]
                 items[field][value] = items[field].get(value, 0) + 1
 
         if 'tracker_host' in items:
             items['tracker_host']['All'] = len(torrent_ids)
-            items['tracker_host']['Error'] = len(tracker_error_filter(torrent_ids, ('Error',)))
+            items['tracker_host']['Error'] = len(
+                tracker_error_filter(torrent_ids, ('Error',))
+            )
 
         if not show_zero_hits:
             for cat in ['state', 'owner', 'tracker_host']:
@@ -215,7 +230,7 @@ class FilterManager(component.Component):
         sorted_items = {field: sorted(items[field].items()) for field in tree_keys}
 
         if 'state' in tree_keys:
-            sorted_items['state'].sort(self._sort_state_items)
+            sorted_items['state'].sort(key=self._sort_state_item)
 
         return sorted_items
 
@@ -224,7 +239,9 @@ class FilterManager(component.Component):
         init_state['All'] = len(self.torrents.get_torrent_list())
         for state in TORRENT_STATE:
             init_state[state] = 0
-        init_state['Active'] = len(self.filter_state_active(self.torrents.get_torrent_list()))
+        init_state['Active'] = len(
+            self.filter_state_active(self.torrents.get_torrent_list())
+        )
         return init_state
 
     def register_filter(self, filter_id, filter_func, filter_value=None):
@@ -242,7 +259,9 @@ class FilterManager(component.Component):
 
     def filter_state_active(self, torrent_ids):
         for torrent_id in list(torrent_ids):
-            status = self.torrents[torrent_id].get_status(['download_payload_rate', 'upload_payload_rate'])
+            status = self.torrents[torrent_id].get_status(
+                ['download_payload_rate', 'upload_payload_rate']
+            )
             if status['download_payload_rate'] or status['upload_payload_rate']:
                 pass
             else:
@@ -251,18 +270,12 @@ class FilterManager(component.Component):
 
     def _hide_state_items(self, state_items):
         """For hide(show)-zero hits"""
-        for (value, count) in state_items.items():
+        for value, count in list(state_items.items()):
             if value != 'All' and count == 0:
                 del state_items[value]
 
-    def _sort_state_items(self, x, y):
-        if x[0] in STATE_SORT:
-            ix = STATE_SORT.index(x[0])
-        else:
-            ix = 99
-        if y[0] in STATE_SORT:
-            iy = STATE_SORT.index(y[0])
-        else:
-            iy = 99
-
-        return ix - iy
+    def _sort_state_item(self, item):
+        try:
+            return STATE_SORT.index(item[0])
+        except ValueError:
+            return 99

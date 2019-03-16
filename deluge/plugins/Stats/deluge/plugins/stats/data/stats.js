@@ -1,4 +1,4 @@
-/*!
+/**
  * Script: stats.js
  *      The javascript client-side code for the Stats plugin.
  *
@@ -11,16 +11,17 @@
 
 StatsPlugin = Ext.extend(Deluge.Plugin, {
     constructor: function(config) {
-        config = Ext.apply({
-            name: "Stats"
-        }, config);
+        config = Ext.apply(
+            {
+                name: 'Stats',
+            },
+            config
+        );
         StatsPlugin.superclass.constructor.call(this, config);
     },
 
-    onDisable: function() {
-    },
+    onDisable: function() {},
 
-    onEnable: function() {
-    }
+    onEnable: function() {},
 });
 new StatsPlugin();

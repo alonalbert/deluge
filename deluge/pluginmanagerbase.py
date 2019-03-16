@@ -56,7 +56,9 @@ class PluginManagerBase(object):
         self.config = deluge.configmanager.ConfigManager(config_file)
 
         # Create the plugins folder if it doesn't exist
-        if not os.path.exists(os.path.join(deluge.configmanager.get_config_dir(), 'plugins')):
+        if not os.path.exists(
+            os.path.join(deluge.configmanager.get_config_dir(), 'plugins')
+        ):
             os.mkdir(os.path.join(deluge.configmanager.get_config_dir(), 'plugins'))
 
         # This is the entry we want to load..
@@ -92,26 +94,27 @@ class PluginManagerBase(object):
 
     def scan_for_plugins(self):
         """Scans for available plugins"""
-        base_plugin_dir = deluge.common.resource_filename('deluge', 'plugins')
-        pkg_resources.working_set.add_entry(base_plugin_dir)
-        user_plugin_dir = os.path.join(deluge.configmanager.get_config_dir(), 'plugins')
+        base_dir = deluge.common.resource_filename('deluge', 'plugins')
+        user_dir = os.path.join(deluge.configmanager.get_config_dir(), 'plugins')
+        base_subdir = [
+            os.path.join(base_dir, f)
+            for f in os.listdir(base_dir)
+            if os.path.isdir(os.path.join(base_dir, f))
+        ]
+        plugin_dirs = [base_dir, user_dir] + base_subdir
 
-        plugins_dirs = [base_plugin_dir]
-        for dirname in os.listdir(base_plugin_dir):
-            plugin_dir = os.path.join(base_plugin_dir, dirname)
-            pkg_resources.working_set.add_entry(plugin_dir)
-            plugins_dirs.append(plugin_dir)
-        pkg_resources.working_set.add_entry(user_plugin_dir)
-        plugins_dirs.append(user_plugin_dir)
-
-        self.pkg_env = pkg_resources.Environment(plugins_dirs)
+        for dirname in plugin_dirs:
+            pkg_resources.working_set.add_entry(dirname)
+        self.pkg_env = pkg_resources.Environment(plugin_dirs, None)
 
         self.available_plugins = []
         for name in self.pkg_env:
-            log.debug('Found plugin: %s %s at %s',
-                      self.pkg_env[name][0].project_name,
-                      self.pkg_env[name][0].version,
-                      self.pkg_env[name][0].location)
+            log.debug(
+                'Found plugin: %s %s at %s',
+                self.pkg_env[name][0].project_name,
+                self.pkg_env[name][0].version,
+                self.pkg_env[name][0].location,
+            )
             self.available_plugins.append(self.pkg_env[name][0].project_name)
 
     def enable_plugin(self, plugin_name):
@@ -135,19 +138,21 @@ class PluginManagerBase(object):
 
         plugin_name = plugin_name.replace(' ', '-')
         egg = self.pkg_env[plugin_name][0]
+        # Activate is required by non-namespace plugins.
         egg.activate()
         return_d = defer.succeed(True)
 
         for name in egg.get_entry_map(self.entry_name):
-            entry_point = egg.get_entry_info(self.entry_name, name)
             try:
-                cls = entry_point.load()
+                cls = egg.load_entry_point(self.entry_name, name)
                 instance = cls(plugin_name.replace('-', '_'))
             except component.ComponentAlreadyRegistered as ex:
                 log.error(ex)
                 return defer.succeed(False)
             except Exception as ex:
-                log.error('Unable to instantiate plugin %r from %r!', name, egg.location)
+                log.error(
+                    'Unable to instantiate plugin %r from %r!', name, egg.location
+                )
                 log.exception(ex)
                 continue
             try:
@@ -159,33 +164,47 @@ class PluginManagerBase(object):
 
             if not instance.__module__.startswith('deluge.plugins.'):
                 import warnings
+
                 warnings.warn_explicit(
                     DEPRECATION_WARNING % name,
                     DeprecationWarning,
-                    instance.__module__, 0
+                    instance.__module__,
+                    0,
                 )
             if self._component_state == 'Started':
+
                 def on_enabled(result, instance):
                     return component.start([instance.plugin._component_name])
+
                 return_d.addCallback(on_enabled, instance)
 
             def on_started(result, instance):
                 plugin_name_space = plugin_name.replace('-', ' ')
                 self.plugins[plugin_name_space] = instance
                 if plugin_name_space not in self.config['enabled_plugins']:
-                    log.debug('Adding %s to enabled_plugins list in config', plugin_name_space)
+                    log.debug(
+                        'Adding %s to enabled_plugins list in config', plugin_name_space
+                    )
                     self.config['enabled_plugins'].append(plugin_name_space)
                 log.info('Plugin %s enabled...', plugin_name_space)
                 return True
 
             def on_started_error(result, instance):
-                log.error('Failed to start plugin: %s\n%s', plugin_name,
-                          result.getTraceback(elideFrameworkCode=1, detail='brief'))
+                log.error(
+                    'Failed to start plugin: %s\n%s',
+                    plugin_name,
+                    result.getTraceback(elideFrameworkCode=1, detail='brief'),
+                )
                 self.plugins[plugin_name.replace('-', ' ')] = instance
                 self.disable_plugin(plugin_name)
                 return False
 
-            return_d.addCallbacks(on_started, on_started_error, callbackArgs=[instance], errbackArgs=[instance])
+            return_d.addCallbacks(
+                on_started,
+                on_started_error,
+                callbackArgs=[instance],
+                errbackArgs=[instance],
+            )
             return return_d
 
         return defer.succeed(False)
@@ -215,7 +234,9 @@ class PluginManagerBase(object):
         def on_disabled(result):
             ret = True
             if isinstance(result, Failure):
-                log.debug('Error when disabling plugin %s: %s', name, result.getTraceback())
+                log.debug(
+                    'Error when disabling plugin %s: %s', name, result.getTraceback()
+                )
                 ret = False
             try:
                 component.deregister(self.plugins[name].plugin)
@@ -239,14 +260,16 @@ class PluginManagerBase(object):
         cont_lines = []
         # Missing plugin info
         if not self.pkg_env[name]:
-            log.warn('Failed to retrive info for plugin: %s', name)
+            log.warning('Failed to retrive info for plugin: %s', name)
             for k in info:
                 info[k] = 'not available'
             return info
         for line in self.pkg_env[name][0].get_metadata('PKG-INFO').splitlines():
             if not line:
                 continue
-            if line[0] in ' \t' and (len(line.split(':', 1)) == 1 or line.split(':', 1)[0] not in info):
+            if line[0] in ' \t' and (
+                len(line.split(':', 1)) == 1 or line.split(':', 1)[0] not in info
+            ):
                 # This is a continuation
                 cont_lines.append(line.strip())
             else:

@@ -16,11 +16,28 @@ import sys
 from datetime import date
 
 import pkg_resources
+from recommonmark.states import DummyStateMachine
+from recommonmark.transform import AutoStructify
+from sphinx.ext import apidoc
+from sphinx.ext.autodoc import ClassDocumenter, bool_option
 
 try:
     from ...version import get_version
 except ImportError:
     get_version = None
+
+
+# Monkey patch
+class PatchDummyStateMachine(DummyStateMachine):
+    """Fix recommonmark 0.4 doc reference issues."""
+
+    def run_role(self, name, *args, **kwargs):
+        if name == 'doc':
+            name = 'any'
+        return DummyStateMachine.run_role(self, name, *args, **kwargs)
+
+
+DummyStateMachine = PatchDummyStateMachine
 
 # Must add these for autodoc to import packages successully
 __builtin__.__dict__['_'] = lambda x: x
@@ -29,7 +46,13 @@ __builtin__.__dict__['_n'] = lambda s, p, n: s if n == 1 else p
 # If your extensions are in another directory, add it here. If the directory
 # is relative to the documentation root, use os.path.abspath to make it
 # absolute, like shown here.
-sys.path.append(os.path.abspath(os.path.join(os.path.join(os.path.dirname(__file__), os.path.pardir), os.path.pardir)))
+sys.path.append(
+    os.path.abspath(
+        os.path.join(
+            os.path.join(os.path.dirname(__file__), os.path.pardir), os.path.pardir
+        )
+    )
+)
 
 
 class Mock(object):
@@ -53,29 +76,64 @@ class Mock(object):
         else:
             return Mock()
 
+    def __add__(self, other):
+        return other
+
     def __or__(self, __):
         return Mock()
 
 
-MOCK_MODULES = ['deluge.ui.gtkui.gtkui', 'deluge._libtorrent',
-                'libtorrent', 'psyco',
-                'pygtk', 'gtk', 'gobject', 'gtk.gdk', 'pango', 'cairo', 'pangocairo']
+# Use custom mock as autodoc_mock_imports fails to handle these modules.
+MOCK_MODULES = ['deluge._libtorrent', 'xdg', 'xdg.BaseDirectory']
 
 for mod_name in MOCK_MODULES:
     sys.modules[mod_name] = Mock()
+
+autodoc_mock_imports = [
+    'twisted',
+    'rencode',
+    'OpenSSL',
+    'PIL',
+    'libtorrent',
+    'psyco',
+    'gi',
+    'cairo',
+    'curses',
+    'win32api',
+    'win32file',
+    'win32process',
+    'win32pipe',
+    'pywintypes',
+    'win32con',
+    'win32event',
+    'pytest',
+    'mock',
+    'mako',
+    'zope',
+    'zope.interface',
+]
 
 # General configuration
 # ---------------------
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.doctest', 'sphinxcontrib.napoleon', 'sphinx.ext.coverage']
+extensions = [
+    'sphinx.ext.autodoc',
+    'sphinx.ext.doctest',
+    'sphinx.ext.napoleon',
+    'sphinx.ext.coverage',
+]
+
+napoleon_include_init_with_doc = True
+napoleon_use_rtype = False
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
 # The suffix of source filenames.
-source_suffix = '.rst'
+source_parsers = {'.md': 'recommonmark.parser.CommonMarkParser'}
+source_suffix = ['.rst', '.md']
 
 # The master toctree document.
 master_doc = 'index'
@@ -83,7 +141,7 @@ master_doc = 'index'
 # General substitutions.
 project = 'Deluge'
 current_year = date.today().year
-copyright = '2008-%s, Deluge Team' % current_year
+copyright = '2008-%s, Deluge Team' % current_year  # noqa: A001
 
 # The default replacements for |version| and |release|, also used in various
 # other places throughout the built documents.
@@ -93,7 +151,7 @@ copyright = '2008-%s, Deluge Team' % current_year
 if get_version:
     version = get_version(prefix='deluge-', suffix='.dev0')
 else:
-    version = pkg_resources.require('Deluge')[0].version
+    version = pkg_resources.get_distribution('Deluge').version
 # The full version, including alpha/beta/rc tags.
 release = version
 
@@ -131,11 +189,11 @@ pygments_style = 'sphinx'
 
 # Options for HTML output
 # -----------------------
-
+html_theme = 'sphinx_rtd_theme'
 # The style sheet to use for HTML and HTML Help pages. A file of that name
 # must exist either in Sphinx' static/ path, or in one of the custom paths
 # given in html_static_path.
-html_style = 'default.css'
+# html_style = 'default.css'
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -209,8 +267,7 @@ htmlhelp_basename = 'delugedoc'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, document class [howto/manual]).
 latex_documents = [
-    ('index', 'deluge.tex', 'deluge Documentation',
-     'Deluge Team', 'manual'),
+    ('index', 'deluge.tex', 'deluge Documentation', 'Deluge Team', 'manual')
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -229,3 +286,38 @@ latex_documents = [
 
 # If false, no module index is generated.
 # latex_use_modindex = True
+
+# Register an autodoc class directive to only include exported methods.
+ClassDocumenter.option_spec['exported'] = bool_option
+
+
+def maybe_skip_member(app, what, name, obj, skip, options):
+    if options.exported and not (
+        hasattr(obj, '_rpcserver_export') or hasattr(obj, '_json_export')
+    ):
+        return True
+
+
+# Run the sphinx-apidoc to create package/modules rst files for autodoc.
+def run_apidoc(__):
+    cur_dir = os.path.abspath(os.path.dirname(__file__))
+    module_dir = os.path.join(cur_dir, '..', '..', 'deluge')
+    ignore_paths = [
+        os.path.join(module_dir, 'plugins'),
+        os.path.join(module_dir, 'tests'),
+    ]
+    argv = [
+        '--force',
+        '--no-toc',
+        '--output-dir',
+        os.path.join(cur_dir, 'modules'),
+        module_dir,
+    ] + ignore_paths
+    apidoc.main(argv)
+
+
+def setup(app):
+    app.connect('builder-inited', run_apidoc)
+    app.connect('autodoc-skip-member', maybe_skip_member)
+    app.add_config_value('recommonmark_config', {}, True)
+    app.add_transform(AutoStructify)

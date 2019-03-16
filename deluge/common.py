@@ -11,7 +11,7 @@
 from __future__ import division, print_function, unicode_literals
 
 import base64
-import datetime
+import binascii
 import functools
 import glob
 import locale
@@ -24,12 +24,19 @@ import subprocess
 import sys
 import tarfile
 import time
+from contextlib import closing
+from datetime import datetime
+from io import BytesIO, open
 
-import chardet
 import pkg_resources
 
 from deluge.decorators import deprecated
 from deluge.error import InvalidPathError
+
+try:
+    import chardet
+except ImportError:
+    chardet = None
 
 try:
     from urllib.parse import unquote_plus, urljoin
@@ -39,19 +46,19 @@ except ImportError:
     from urlparse import urljoin  # pylint: disable=ungrouped-imports
     from urllib import pathname2url, unquote_plus  # pylint: disable=ungrouped-imports
 
-DBUS_FILEMAN = None
+# Windows workaround for HTTPS requests requiring certificate authority bundle.
+# see: https://twistedmatrix.com/trac/ticket/9209
+if platform.system() in ('Windows', 'Microsoft'):
+    from certifi import where
+
+    os.environ['SSL_CERT_FILE'] = where()
+
 # gi makes dbus available on Window but don't import it as unused.
 if platform.system() not in ('Windows', 'Microsoft', 'Darwin'):
     try:
         import dbus
     except ImportError:
-        pass
-    else:
-        try:
-            bus = dbus.SessionBus()
-            DBUS_FILEMAN = bus.get_object('org.freedesktop.FileManager1', '/org/freedesktop/FileManager1')
-        except dbus.DBusException:
-            pass
+        dbus = None
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +70,7 @@ TORRENT_STATE = [
     'Paused',
     'Error',
     'Queued',
-    'Moving'
+    'Moving',
 ]
 
 # The output formatting for json.dump
@@ -73,14 +80,12 @@ PY2 = sys.version_info.major == 2
 
 
 def get_version():
-    """
-    Returns the program version from the egg metadata
+    """The program version from the egg metadata.
 
-    :returns: the version of Deluge
-    :rtype: string
-
+    Returns:
+        str: The version of Deluge.
     """
-    return pkg_resources.require('Deluge')[0].version
+    return pkg_resources.get_distribution('Deluge').version
 
 
 def get_default_config_dir(filename=None):
@@ -94,6 +99,7 @@ def get_default_config_dir(filename=None):
     """
 
     if windows_check():
+
         def save_config_path(resource):
             app_data_path = os.environ.get('APPDATA')
             if not app_data_path:
@@ -103,11 +109,13 @@ def get_default_config_dir(filename=None):
                     import _winreg as winreg  # For Python 2.
                 hkey = winreg.OpenKey(
                     winreg.HKEY_CURRENT_USER,
-                    'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders')
+                    'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders',
+                )
                 app_data_reg = winreg.QueryValueEx(hkey, 'AppData')
                 app_data_path = app_data_reg[0]
                 winreg.CloseKey(hkey)
             return os.path.join(app_data_path, resource)
+
     else:
         from xdg.BaseDirectory import save_config_path
     if not filename:
@@ -128,11 +136,15 @@ def get_default_download_dir():
     download_dir = ''
     if not windows_check():
         from xdg.BaseDirectory import xdg_config_home
+
         try:
-            with open(os.path.join(xdg_config_home, 'user-dirs.dirs'), 'r') as _file:
+            user_dirs_path = os.path.join(xdg_config_home, 'user-dirs.dirs')
+            with open(user_dirs_path, 'r', encoding='utf8') as _file:
                 for line in _file:
                     if not line.startswith('#') and line.startswith('XDG_DOWNLOAD_DIR'):
-                        download_dir = os.path.expandvars(line.partition('=')[2].rstrip().strip('"'))
+                        download_dir = os.path.expandvars(
+                            line.partition('=')[2].rstrip().strip('"')
+                        )
                         break
         except IOError:
             pass
@@ -142,47 +154,58 @@ def get_default_download_dir():
     return download_dir
 
 
-def archive_files(arc_name, filepaths):
-        """Compress a list of filepaths into timestamped tarball in config dir.
+def archive_files(arc_name, filepaths, message=None, rotate=10):
+    """Compress a list of filepaths into timestamped tarball in config dir.
 
-        The archiving config directory is 'archive'.
+    The archiving config directory is 'archive'.
 
-        Args:
-            arc_name (str): The archive output filename (appended with timestamp).
-            filepaths (list): A list of the files to be archived into tarball.
+    Args:
+        arc_name (str): The archive output filename (appended with timestamp).
+        filepaths (list): A list of the files to be archived into tarball.
 
-        Returns:
-            str: The full archive filepath.
+    Returns:
+        str: The full archive filepath.
 
-        """
+    """
 
-        from deluge.configmanager import get_config_dir
+    from deluge.configmanager import get_config_dir
 
-        # Set archive compression to lzma with bz2 fallback.
-        arc_comp = 'xz' if not PY2 else 'bz2'
+    # Set archive compression to lzma with bz2 fallback.
+    arc_comp = 'xz' if not PY2 else 'bz2'
 
-        archive_dir = os.path.join(get_config_dir(), 'archive')
-        timestamp = datetime.datetime.now().replace(microsecond=0).isoformat().replace(':', '-')
-        arc_filepath = os.path.join(archive_dir, arc_name + '-' + timestamp + '.tar.' + arc_comp)
-        max_num_arcs = 20
+    archive_dir = os.path.join(get_config_dir(), 'archive')
+    timestamp = datetime.now().replace(microsecond=0).isoformat().replace(':', '-')
+    arc_filepath = os.path.join(
+        archive_dir, arc_name + '-' + timestamp + '.tar.' + arc_comp
+    )
 
-        if not os.path.exists(archive_dir):
-            os.makedirs(archive_dir)
-        else:
-            old_arcs = glob.glob(os.path.join(archive_dir, arc_name) + '*')
-            if len(old_arcs) > max_num_arcs:
-                # TODO: Remove oldest timestamped archives.
-                log.warning('More than %s tarballs in config archive', max_num_arcs)
+    if not os.path.exists(archive_dir):
+        os.makedirs(archive_dir)
+    else:
+        all_arcs = glob.glob(os.path.join(archive_dir, arc_name) + '*')
+        if len(all_arcs) >= rotate:
+            log.warning(
+                'Too many existing archives for %s. Deleting oldest archive.', arc_name
+            )
+            os.remove(sorted(all_arcs)[0])
 
-        try:
-            with tarfile.open(arc_filepath, 'w:' + arc_comp) as tf:
-                for filepath in filepaths:
-                    tf.add(filepath, arcname=os.path.basename(filepath))
-        except OSError:
-            log.error('Problem occurred archiving filepaths: %s', filepaths)
-            return False
-        else:
-            return arc_filepath
+    try:
+        with tarfile.open(arc_filepath, 'w:' + arc_comp) as tar:
+            for filepath in filepaths:
+                if not os.path.isfile(filepath):
+                    continue
+                tar.add(filepath, arcname=os.path.basename(filepath))
+            if message:
+                with closing(BytesIO(message.encode('utf8'))) as fobj:
+                    tarinfo = tarfile.TarInfo('archive_message.txt')
+                    tarinfo.size = len(fobj.getvalue())
+                    tarinfo.mtime = time.time()
+                    tar.addfile(tarinfo, fileobj=fobj)
+    except OSError:
+        log.error('Problem occurred archiving filepaths: %s', filepaths)
+        return False
+    else:
+        return arc_filepath
 
 
 def windows_check():
@@ -246,7 +269,7 @@ def get_os_version():
     elif linux_check():
         os_version = platform.linux_distribution()
     else:
-        os_version = (platform.release(), )
+        os_version = (platform.release(),)
 
     return ' '.join(filter(None, os_version))
 
@@ -265,14 +288,17 @@ def get_pixmap(fname):
 
 
 def resource_filename(module, path):
-    """While developing, if there's a second deluge package, installed globally
-     and another in develop mode somewhere else, while pkg_resources.require('Deluge')
-     returns the proper deluge instance, pkg_resources.resource_filename does
-     not, it returns the first found on the python path, which is not good
-     enough.
-     This is a work-around that.
+    """Get filesystem path for a resource.
+
+    This function contains a work-around for pkg_resources.resource_filename
+    not returning the correct path with multiple packages installed.
+
+    So if there's a second deluge package, installed globally and another in
+    develop mode somewhere else, while pkg_resources.get_distribution('Deluge')
+    returns the proper deluge instance, pkg_resources.resource_filename
+    does not, it returns the first found on the python path, which is wrong.
     """
-    return pkg_resources.require('Deluge>=%s' % get_version())[0].get_resource_filename(
+    return pkg_resources.get_distribution('Deluge').get_resource_filename(
         pkg_resources._manager, os.path.join(*(module.split('.') + [path]))
     )
 
@@ -293,8 +319,12 @@ def open_file(path, timestamp=None):
         if timestamp is None:
             timestamp = int(time.time())
         env = os.environ.copy()
-        env['DESKTOP_STARTUP_ID'] = '%s-%u-%s-xdg_open_TIME%d' % \
-            (os.path.basename(sys.argv[0]), os.getpid(), os.uname()[1], timestamp)
+        env['DESKTOP_STARTUP_ID'] = '%s-%u-%s-xdg_open_TIME%d' % (
+            os.path.basename(sys.argv[0]),
+            os.getpid(),
+            os.uname()[1],
+            timestamp,
+        )
         subprocess.Popen(['xdg-open', '%s' % path], env=env)
 
 
@@ -313,10 +343,22 @@ def show_file(path, timestamp=None):
     else:
         if timestamp is None:
             timestamp = int(time.time())
-        startup_id = '%s_%u_%s-dbus_TIME%d' % (os.path.basename(sys.argv[0]), os.getpid(), os.uname()[1], timestamp)
-        if DBUS_FILEMAN:
+        startup_id = '%s_%u_%s-dbus_TIME%d TIMESTAMP=%d' % (
+            os.path.basename(sys.argv[0]),
+            os.getpid(),
+            os.uname()[1],
+            timestamp,
+            timestamp,
+        )
+        if dbus:
+            bus = dbus.SessionBus()
+            filemanager1 = bus.get_object(
+                'org.freedesktop.FileManager1', '/org/freedesktop/FileManager1'
+            )
             paths = [urljoin('file:', pathname2url(path))]
-            DBUS_FILEMAN.ShowItems(paths, startup_id, dbus_interface='org.freedesktop.FileManager1')
+            filemanager1.ShowItems(
+                paths, startup_id, dbus_interface='org.freedesktop.FileManager1'
+            )
         else:
             env = os.environ.copy()
             env['DESKTOP_STARTUP_ID'] = startup_id.replace('dbus', 'xdg-open')
@@ -333,6 +375,7 @@ def open_url_in_browser(url):
 
     """
     import webbrowser
+
     webbrowser.open(url)
 
 
@@ -388,13 +431,29 @@ def fsize(fsize_b, precision=1, shortform=False):
     """
 
     if fsize_b >= 1024 ** 4:
-        return '%.*f %s' % (precision, fsize_b / 1024 ** 4, tib_txt_short if shortform else tib_txt)
+        return '%.*f %s' % (
+            precision,
+            fsize_b / 1024 ** 4,
+            tib_txt_short if shortform else tib_txt,
+        )
     elif fsize_b >= 1024 ** 3:
-        return '%.*f %s' % (precision, fsize_b / 1024 ** 3, gib_txt_short if shortform else gib_txt)
+        return '%.*f %s' % (
+            precision,
+            fsize_b / 1024 ** 3,
+            gib_txt_short if shortform else gib_txt,
+        )
     elif fsize_b >= 1024 ** 2:
-        return '%.*f %s' % (precision, fsize_b / 1024 ** 2, mib_txt_short if shortform else mib_txt)
+        return '%.*f %s' % (
+            precision,
+            fsize_b / 1024 ** 2,
+            mib_txt_short if shortform else mib_txt,
+        )
     elif fsize_b >= 1024:
-        return '%.*f %s' % (precision, fsize_b / 1024, kib_txt_short if shortform else kib_txt)
+        return '%.*f %s' % (
+            precision,
+            fsize_b / 1024,
+            kib_txt_short if shortform else kib_txt,
+        )
     else:
         return '%d %s' % (fsize_b, byte_txt)
 
@@ -417,7 +476,7 @@ def fpcnt(dec, precision=2):
 
     """
 
-    pcnt = (dec * 100)
+    pcnt = dec * 100
     if pcnt == 0 or pcnt == 100:
         precision = 0
     return '%.*f%%' % (precision, pcnt)
@@ -439,13 +498,29 @@ def fspeed(bps, precision=1, shortform=False):
     """
 
     if bps < 1024 ** 2:
-        return '%.*f %s' % (precision, bps / 1024, _('K/s') if shortform else _('KiB/s'))
+        return '%.*f %s' % (
+            precision,
+            bps / 1024,
+            _('K/s') if shortform else _('KiB/s'),
+        )
     elif bps < 1024 ** 3:
-        return '%.*f %s' % (precision, bps / 1024 ** 2, _('M/s') if shortform else _('MiB/s'))
+        return '%.*f %s' % (
+            precision,
+            bps / 1024 ** 2,
+            _('M/s') if shortform else _('MiB/s'),
+        )
     elif bps < 1024 ** 4:
-        return '%.*f %s' % (precision, bps / 1024 ** 3, _('G/s') if shortform else _('GiB/s'))
+        return '%.*f %s' % (
+            precision,
+            bps / 1024 ** 3,
+            _('G/s') if shortform else _('GiB/s'),
+        )
     else:
-        return '%.*f %s' % (precision, bps / 1024 ** 4, _('T/s') if shortform else _('TiB/s'))
+        return '%.*f %s' % (
+            precision,
+            bps / 1024 ** 4,
+            _('T/s') if shortform else _('TiB/s'),
+        )
 
 
 def fpeer(num_peers, total_peers):
@@ -475,7 +550,7 @@ def ftime(secs):
     """Formats a string to show time in a human readable form.
 
     Args:
-        secs (int): The number of seconds.
+        secs (int or float): The number of seconds.
 
     Returns:
         str: A formatted time string or empty string if value is 0.
@@ -489,20 +564,22 @@ def ftime(secs):
 
     """
 
+    # Handle floats by truncating to an int
+    secs = int(secs)
     if secs <= 0:
         time_str = ''
     elif secs < 60:
-        time_str = '{:d}s'.format(secs)
+        time_str = '{}s'.format(secs)
     elif secs < 3600:
-        time_str = '{:d}m {:d}s'.format(secs // 60, secs % 60)
+        time_str = '{}m {}s'.format(secs // 60, secs % 60)
     elif secs < 86400:
-        time_str = '{:d}h {:d}m'.format(secs // 3600, secs // 60 % 60)
+        time_str = '{}h {}m'.format(secs // 3600, secs // 60 % 60)
     elif secs < 604800:
-        time_str = '{:d}d {:d}h'.format(secs // 86400, secs // 3600 % 24)
+        time_str = '{}d {}h'.format(secs // 86400, secs // 3600 % 24)
     elif secs < 31449600:
-        time_str = '{:d}w {:d}d'.format(secs // 604800, secs // 86400 % 7)
+        time_str = '{}w {}d'.format(secs // 604800, secs // 86400 % 7)
     else:
-        time_str = '{:d}y {:d}w'.format(secs // 31449600, secs // 604800 % 52)
+        time_str = '{}y {}w'.format(secs // 31449600, secs // 604800 % 52)
 
     return time_str
 
@@ -554,18 +631,20 @@ def tokenize(text):
     return tokenized_input
 
 
-size_units = (dict(prefix='b', divider=1, singular='byte', plural='bytes'),
-              dict(prefix='KiB', divider=1024**1),
-              dict(prefix='MiB', divider=1024**2),
-              dict(prefix='GiB', divider=1024**3),
-              dict(prefix='TiB', divider=1024**4),
-              dict(prefix='PiB', divider=1024**5),
-              dict(prefix='KB', divider=1000**1),
-              dict(prefix='MB', divider=1000**2),
-              dict(prefix='GB', divider=1000**3),
-              dict(prefix='TB', divider=1000**4),
-              dict(prefix='PB', divider=1000**5),
-              dict(prefix='m', divider=1000**2))
+size_units = [
+    {'prefix': 'b', 'divider': 1, 'singular': 'byte', 'plural': 'bytes'},
+    {'prefix': 'KiB', 'divider': 1024 ** 1},
+    {'prefix': 'MiB', 'divider': 1024 ** 2},
+    {'prefix': 'GiB', 'divider': 1024 ** 3},
+    {'prefix': 'TiB', 'divider': 1024 ** 4},
+    {'prefix': 'PiB', 'divider': 1024 ** 5},
+    {'prefix': 'KB', 'divider': 1000 ** 1},
+    {'prefix': 'MB', 'divider': 1000 ** 2},
+    {'prefix': 'GB', 'divider': 1000 ** 3},
+    {'prefix': 'TB', 'divider': 1000 ** 4},
+    {'prefix': 'PB', 'divider': 1000 ** 5},
+    {'prefix': 'm', 'divider': 1000 ** 2},
+]
 
 
 class InvalidSize(Exception):
@@ -660,10 +739,10 @@ def is_magnet(uri):
     True
 
     """
+    if not uri:
+        return False
 
-    if uri.startswith(MAGNET_SCHEME) and XT_BTIH_PARAM in uri:
-        return True
-    return False
+    return uri.startswith(MAGNET_SCHEME) and XT_BTIH_PARAM in uri
 
 
 def get_magnet_info(uri):
@@ -686,7 +765,7 @@ def get_magnet_info(uri):
     """
 
     tr0_param = 'tr.'
-    tr0_param_regex = re.compile('^tr.(\d+)=(\S+)')
+    tr0_param_regex = re.compile(r'^tr.(\d+)=(\S+)')
     if not uri.startswith(MAGNET_SCHEME):
         return {}
 
@@ -694,23 +773,24 @@ def get_magnet_info(uri):
     info_hash = None
     trackers = {}
     tier = 0
-    for param in uri[len(MAGNET_SCHEME):].split('&'):
+    for param in uri[len(MAGNET_SCHEME) :].split('&'):
         if param.startswith(XT_BTIH_PARAM):
-            xt_hash = param[len(XT_BTIH_PARAM):]
+            xt_hash = param[len(XT_BTIH_PARAM) :]
             if len(xt_hash) == 32:
                 try:
-                    info_hash = base64.b32decode(xt_hash.upper()).encode('hex')
+                    infohash_str = base64.b32decode(xt_hash.upper())
                 except TypeError as ex:
                     log.debug('Invalid base32 magnet hash: %s, %s', xt_hash, ex)
                     break
+                info_hash = binascii.hexlify(infohash_str).decode()
             elif is_infohash(xt_hash):
                 info_hash = xt_hash.lower()
             else:
                 break
         elif param.startswith(DN_PARAM):
-            name = unquote_plus(param[len(DN_PARAM):])
+            name = unquote_plus(param[len(DN_PARAM) :])
         elif param.startswith(TR_PARAM):
-            tracker = unquote_plus(param[len(TR_PARAM):])
+            tracker = unquote_plus(param[len(TR_PARAM) :])
             trackers[tracker] = tier
             tier += 1
         elif param.startswith(tr0_param):
@@ -723,7 +803,12 @@ def get_magnet_info(uri):
     if info_hash:
         if not name:
             name = info_hash
-        return {'name': name, 'info_hash': info_hash, 'files_tree': '', 'trackers': trackers}
+        return {
+            'name': name,
+            'info_hash': info_hash,
+            'files_tree': '',
+            'trackers': trackers,
+        }
     else:
         return {}
 
@@ -741,11 +826,11 @@ def create_magnet_uri(infohash, name=None, trackers=None):
 
     """
     try:
-        infohash = infohash.decode('hex')
-    except AttributeError:
-        pass
+        infohash = binascii.unhexlify(infohash)
+    except TypeError:
+        infohash.encode('utf-8')
 
-    uri = [MAGNET_SCHEME, XT_BTIH_PARAM, base64.b32encode(infohash)]
+    uri = [MAGNET_SCHEME, XT_BTIH_PARAM, base64.b32encode(infohash).decode('utf-8')]
     if name:
         uri.extend(['&', DN_PARAM, name])
     if trackers:
@@ -800,6 +885,7 @@ def free_space(path):
 
     if windows_check():
         from win32file import GetDiskFreeSpaceEx
+
         return GetDiskFreeSpaceEx(path)[0]
     else:
         disk_data = os.statvfs(path.encode('utf8'))
@@ -843,6 +929,7 @@ def is_ipv4(ip):
     """
 
     import socket
+
     try:
         if windows_check():
             return socket.inet_aton(ip)
@@ -871,6 +958,7 @@ def is_ipv6(ip):
         import ipaddress
     except ImportError:
         import socket
+
         try:
             return socket.inet_pton(socket.AF_INET6, ip)
         except (socket.error, AttributeError):
@@ -906,12 +994,12 @@ def decode_bytes(byte_str, encoding='utf8'):
     elif not isinstance(byte_str, bytes):
         return byte_str
 
-    encodings = [lambda: ('utf8', 'strict'),
-                 lambda: ('iso-8859-1', 'strict'),
-                 lambda: (chardet.detect(byte_str)['encoding'], 'strict'),
-                 lambda: (encoding, 'ignore')]
+    encodings = [lambda: ('utf8', 'strict'), lambda: ('iso-8859-1', 'strict')]
+    if chardet:
+        encodings.append(lambda: (chardet.detect(byte_str)['encoding'], 'strict'))
+    encodings.append(lambda: (encoding, 'ignore'))
 
-    if encoding is not 'utf8':
+    if encoding.lower() not in ['utf8', 'utf-8']:
         encodings.insert(0, lambda: (encoding, 'strict'))
 
     for l in encodings:
@@ -925,13 +1013,13 @@ def decode_bytes(byte_str, encoding='utf8'):
 @deprecated
 def decode_string(byte_str, encoding='utf8'):
     """Deprecated: Use decode_bytes"""
-    decode_bytes(byte_str, encoding)
+    return decode_bytes(byte_str, encoding)
 
 
 @deprecated
 def utf8_encoded(str_, encoding='utf8'):
     """Deprecated: Use encode or decode_bytes if needed"""
-    decode_bytes(str_, encoding).encode('utf8')
+    return decode_bytes(str_, encoding).encode('utf8')
 
 
 def utf8_encode_structure(data):
@@ -949,7 +1037,9 @@ def utf8_encode_structure(data):
     if isinstance(data, (list, tuple)):
         return type(data)([utf8_encode_structure(d) for d in data])
     elif isinstance(data, dict):
-        return dict([utf8_encode_structure(d) for d in data.items()])
+        return {
+            utf8_encode_structure(k): utf8_encode_structure(v) for k, v in data.items()
+        }
     elif not isinstance(data, bytes):
         try:
             return data.encode('utf8')
@@ -967,8 +1057,10 @@ class VersionSplit(object):
     :type ver: string
 
     """
+
     def __init__(self, ver):
-        version_re = re.compile(r"""
+        version_re = re.compile(
+            r"""
         ^
         (?P<version>\d+\.\d+)          # minimum 'N.N'
         (?P<extraversion>(?:\.\d+)*)   # any number of extra '.N' segments
@@ -978,7 +1070,9 @@ class VersionSplit(object):
             (?P<prerelversion>\d+(?:\.\d+)*)
         )?
         (?P<postdev>(\.post(?P<post>\d+))?(\.dev(?P<dev>\d+))?)?
-        $""", re.VERBOSE)
+        $""",
+            re.VERBOSE,
+        )
 
         # Check for PEP 386 compliant version
         match = re.search(version_re, ver)
@@ -992,25 +1086,27 @@ class VersionSplit(object):
         self.version = [int(x) for x in vs[0].split('.') if x.isdigit()]
         self.version_string = ''.join(str(x) for x in vs[0].split('.') if x.isdigit())
         self.suffix = None
-        self.dev = False
+        self.dev = None
         if len(vs) > 1:
             if vs[1].startswith(('rc', 'a', 'b', 'c')):
                 self.suffix = vs[1]
             if vs[-1].startswith('dev'):
-                self.dev = vs[-1]
+                try:
+                    # Store only the dev numeral.
+                    self.dev = int(vs[-1].rsplit('dev')[1])
+                except ValueError:
+                    # Implicit dev numeral is 0.
+                    self.dev = 0
 
     def get_comparable_versions(self, other):
         """
         Returns a 2-tuple of lists for use in the comparison
         methods.
         """
-        # PEP 386 versions with .devN precede release version
-        if bool(self.dev) != bool(other.dev):
-            if self.dev != 'dev':
-                self.dev = not self.dev
-            if other.dev != 'dev':
-                other.dev = not other.dev
-
+        # PEP 386 versions with .devN precede release version so default
+        # non-dev versions to infinity while dev versions are ints.
+        self.dev = float('inf') if self.dev is None else self.dev
+        other.dev = float('inf') if other.dev is None else other.dev
         # If there is no suffix we use z because we want final
         # to appear after alpha, beta, and rc alphabetically.
         v1 = [self.version, self.suffix or 'z', self.dev]
@@ -1042,7 +1138,7 @@ def create_auth_file():
     auth_file = deluge.configmanager.get_config_dir('auth')
     # Check for auth file and create if necessary
     if not os.path.exists(auth_file):
-        with open(auth_file, 'w') as _file:
+        with open(auth_file, 'w', encoding='utf8') as _file:
             _file.flush()
             os.fsync(_file.fileno())
         # Change the permissions on the file so only this user can read/write it
@@ -1058,48 +1154,54 @@ def create_localclient_account(append=False):
     if not os.path.exists(auth_file):
         create_auth_file()
 
-    with open(auth_file, 'a' if append else 'w') as _file:
-        _file.write(':'.join([
-            'localclient',
-            sha(str(random.random()).encode('utf8')).hexdigest(),
-            str(AUTH_LEVEL_ADMIN)
-        ]) + '\n')
+    with open(auth_file, 'a' if append else 'w', encoding='utf8') as _file:
+        _file.write(
+            ':'.join(
+                [
+                    'localclient',
+                    sha(str(random.random()).encode('utf8')).hexdigest(),
+                    str(AUTH_LEVEL_ADMIN),
+                ]
+            )
+            + '\n'
+        )
         _file.flush()
         os.fsync(_file.fileno())
 
 
 def get_localhost_auth():
-        """Grabs the localclient auth line from the 'auth' file and creates a localhost uri.
+    """Grabs the localclient auth line from the 'auth' file and creates a localhost uri.
 
-        Returns:
-            tuple: With the username and password to login as.
+    Returns:
+        tuple: With the username and password to login as.
+    """
+    from deluge.configmanager import get_config_dir
 
-        """
-        from deluge.configmanager import get_config_dir
-        auth_file = get_config_dir('auth')
-        if not os.path.exists(auth_file):
-            from deluge.common import create_localclient_account
-            create_localclient_account()
+    auth_file = get_config_dir('auth')
+    if not os.path.exists(auth_file):
+        from deluge.common import create_localclient_account
 
-        with open(auth_file) as auth:
-            for line in auth:
-                line = line.strip()
-                if line.startswith('#') or not line:
-                    # This is a comment or blank line
-                    continue
+        create_localclient_account()
 
-                lsplit = line.split(':')
+    with open(auth_file, encoding='utf8') as auth:
+        for line in auth:
+            line = line.strip()
+            if line.startswith('#') or not line:
+                # This is a comment or blank line
+                continue
 
-                if len(lsplit) == 2:
-                    username, password = lsplit
-                elif len(lsplit) == 3:
-                    username, password, level = lsplit
-                else:
-                    log.error('Your auth file is malformed: Incorrect number of fields!')
-                    continue
+            lsplit = line.split(':')
 
-                if username == 'localclient':
-                    return (username, password)
+            if len(lsplit) == 2:
+                username, password = lsplit
+            elif len(lsplit) == 3:
+                username, password, level = lsplit
+            else:
+                log.error('Your auth file is malformed: Incorrect number of fields!')
+                continue
+
+            if username == 'localclient':
+                return (username, password)
 
 
 def set_env_variable(name, value):
@@ -1133,39 +1235,26 @@ def set_env_variable(name, value):
     if windows_check():
         from ctypes import windll
         from ctypes import cdll
-        from ctypes.util import find_msvcrt
 
         # Update the copy maintained by Windows (so SysInternals Process Explorer sees it)
-        try:
-            result = windll.kernel32.SetEnvironmentVariableW(name, value)
-            if result == 0:
-                raise Warning
-        except Exception:
-            log.warning('Failed to set Env Var \'%s\' (\'kernel32.SetEnvironmentVariableW\')', name)
+        result = windll.kernel32.SetEnvironmentVariableW(name, value)
+        if result == 0:
+            log.info(
+                "Failed to set Env Var '%s' (kernel32.SetEnvironmentVariableW)", name
+            )
         else:
-            log.debug('Set Env Var \'%s\' to \'%s\' (\'kernel32.SetEnvironmentVariableW\')', name, value)
+            log.debug(
+                "Set Env Var '%s' to '%s' (kernel32.SetEnvironmentVariableW)",
+                name,
+                value,
+            )
 
         # Update the copy maintained by msvcrt (used by gtk+ runtime)
-        try:
-            result = cdll.msvcrt._putenv('%s=%s' % (name, value))
-            if result != 0:
-                raise Warning
-        except Exception:
-            log.warning('Failed to set Env Var \'%s\' (\'msvcrt._putenv\')', name)
+        result = cdll.msvcrt._wputenv('%s=%s' % (name, value))
+        if result != 0:
+            log.info("Failed to set Env Var '%s' (msvcrt._putenv)", name)
         else:
-            log.debug('Set Env Var \'%s\' to \'%s\' (\'msvcrt._putenv\')', name, value)
-
-        # Update the copy maintained by whatever c runtime is used by Python
-        try:
-            msvcrt = find_msvcrt()
-            msvcrtname = str(msvcrt).split('.')[0] if '.' in msvcrt else str(msvcrt)
-            result = cdll.LoadLibrary(msvcrt)._putenv('%s=%s' % (name, value))
-            if result != 0:
-                raise Warning
-        except Exception:
-            log.warning('Failed to set Env Var \'%s\' (\'%s._putenv\')', name, msvcrtname)
-        else:
-            log.debug('Set Env Var \'%s\' to \'%s\' (\'%s._putenv\')', name, value, msvcrtname)
+            log.debug("Set Env Var '%s' to '%s' (msvcrt._putenv)", name, value)
 
 
 def unicode_argv():
@@ -1191,8 +1280,7 @@ def unicode_argv():
         if argc.value > 0:
             # Remove Python executable and commands if present
             start = argc.value - len(sys.argv)
-            return [argv[i] for i in
-                    range(start, argc.value)]
+            return [argv[i] for i in range(start, argc.value)]
     else:
         # On other platforms, we have to find the likely encoding of the args and decode
         # First check if sys.stdout or stdin have encoding set
@@ -1225,6 +1313,7 @@ def run_profiled(func, *args, **kwargs):
     """
     if kwargs.get('do_profile', True) is not False:
         import cProfile
+
         profiler = cProfile.Profile()
 
         def on_shutdown():
@@ -1236,6 +1325,7 @@ def run_profiled(func, *args, **kwargs):
             else:
                 import pstats
                 from io import StringIO
+
                 strio = StringIO()
                 ps = pstats.Stats(profiler, stream=strio).sort_stats('cumulative')
                 ps.print_stats()
@@ -1263,6 +1353,7 @@ def is_process_running(pid):
 
     if windows_check():
         from win32process import EnumProcesses
+
         return pid in EnumProcesses()
     else:
         try:

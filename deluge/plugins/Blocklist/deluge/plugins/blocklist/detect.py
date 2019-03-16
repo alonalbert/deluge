@@ -12,22 +12,14 @@ from __future__ import unicode_literals
 from .decompressers import BZipped2, GZipped, Zipped
 from .readers import EmuleReader, PeerGuardianReader, SafePeerReader
 
-COMPRESSION_TYPES = {
-    'PK': 'Zip',
-    '\x1f\x8b': 'GZip',
-    'BZ': 'BZip2'
-}
+COMPRESSION_TYPES = {b'PK': 'Zip', b'\x1f\x8b': 'GZip', b'BZ': 'BZip2'}
 
-DECOMPRESSERS = {
-    'Zip': Zipped,
-    'GZip': GZipped,
-    'BZip2': BZipped2
-}
+DECOMPRESSERS = {'Zip': Zipped, 'GZip': GZipped, 'BZip2': BZipped2}
 
 READERS = {
     'Emule': EmuleReader,
     'SafePeer': SafePeerReader,
-    'PeerGuardian': PeerGuardianReader
+    'PeerGuardian': PeerGuardianReader,
 }
 
 

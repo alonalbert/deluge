@@ -1,4 +1,4 @@
-/*!
+/**
  * Deluge.add.Window.js
  *
  * Copyright (c) Damien Churchill 2009-2010 <damoxc@gmail.com>
@@ -17,16 +17,13 @@ Ext.ns('Deluge.add');
 Deluge.add.Window = Ext.extend(Ext.Window, {
     initComponent: function() {
         Deluge.add.Window.superclass.initComponent.call(this);
-        this.addEvents(
-            'beforeadd',
-            'add'
-        );
+        this.addEvents('beforeadd', 'add');
     },
 
     /**
      * Create an id for the torrent before we have any info about it.
      */
     createTorrentId: function() {
-        return new Date().getTime();
-    }
+        return new Date().getTime().toString();
+    },
 });

@@ -1,4 +1,4 @@
-/*!
+/**
  * Script: toggle.js
  *   The client-side javascript code for the Toggle plugin.
  *
@@ -11,18 +11,17 @@
 
 TogglePlugin = Ext.extend(Deluge.Plugin, {
     constructor: function(config) {
-        config = Ext.apply({
-            name: "Toggle"
-        }, config);
+        config = Ext.apply(
+            {
+                name: 'Toggle',
+            },
+            config
+        );
         TogglePlugin.superclass.constructor.call(this, config);
     },
 
-    onDisable: function() {
+    onDisable: function() {},
 
-    },
-
-    onEnable: function() {
-
-    }
+    onEnable: function() {},
 });
 new TogglePlugin();

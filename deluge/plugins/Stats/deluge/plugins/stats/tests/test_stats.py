@@ -27,7 +27,6 @@ def print_totals(totals):
 
 
 class StatsTestCase(BaseTestCase):
-
     def set_up(self):
         defer.setDebugging(True)
         tests_common.set_tmp_config_dir()
@@ -46,10 +45,10 @@ class StatsTestCase(BaseTestCase):
             raise unittest.SkipTest('WebUi plugin not available for testing')
 
         totals = yield client.stats.get_totals()
-        self.assertEquals(totals['total_upload'], 0)
-        self.assertEquals(totals['total_payload_upload'], 0)
-        self.assertEquals(totals['total_payload_download'], 0)
-        self.assertEquals(totals['total_download'], 0)
+        self.assertEqual(totals['total_upload'], 0)
+        self.assertEqual(totals['total_payload_upload'], 0)
+        self.assertEqual(totals['total_payload_download'], 0)
+        self.assertEqual(totals['total_download'], 0)
         # print_totals(totals)
 
     @defer.inlineCallbacks
@@ -59,10 +58,10 @@ class StatsTestCase(BaseTestCase):
             raise unittest.SkipTest('WebUi plugin not available for testing')
 
         totals = yield client.stats.get_session_totals()
-        self.assertEquals(totals['total_upload'], 0)
-        self.assertEquals(totals['total_payload_upload'], 0)
-        self.assertEquals(totals['total_payload_download'], 0)
-        self.assertEquals(totals['total_download'], 0)
+        self.assertEqual(totals['total_upload'], 0)
+        self.assertEqual(totals['total_payload_upload'], 0)
+        self.assertEqual(totals['total_payload_download'], 0)
+        self.assertEqual(totals['total_download'], 0)
         # print_totals(totals)
 
     @pytest.mark.gtkui

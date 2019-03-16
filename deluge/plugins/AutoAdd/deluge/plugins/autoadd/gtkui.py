@@ -17,14 +17,21 @@ from __future__ import unicode_literals
 import logging
 import os
 
-import gtk
+import gi  # isort:skip (Required before Gtk import).
 
+gi.require_version('Gtk', '3.0')  # NOQA: E402
+
+# isort:imports-thirdparty
+from gi.repository import Gtk
+
+# isort:imports-firstparty
 import deluge.common
 import deluge.component as component
-from deluge.plugins.pluginbase import GtkPluginBase
+from deluge.plugins.pluginbase import Gtk3PluginBase
 from deluge.ui.client import client
-from deluge.ui.gtkui import dialogs
+from deluge.ui.gtk3 import dialogs
 
+# isort:imports-localfolder
 from .common import get_resource
 
 log = logging.getLogger(__name__)
@@ -37,26 +44,34 @@ class IncompatibleOption(Exception):
 class OptionsDialog(object):
     spin_ids = ['max_download_speed', 'max_upload_speed', 'stop_ratio']
     spin_int_ids = ['max_upload_slots', 'max_connections']
-    chk_ids = ['stop_at_ratio', 'remove_at_ratio', 'move_completed',
-               'add_paused', 'auto_managed', 'queue_to_top']
+    chk_ids = [
+        'stop_at_ratio',
+        'remove_at_ratio',
+        'move_completed',
+        'add_paused',
+        'auto_managed',
+        'queue_to_top',
+    ]
 
     def __init__(self):
-        self.accounts = gtk.ListStore(str)
-        self.labels = gtk.ListStore(str)
+        self.accounts = Gtk.ListStore(str)
+        self.labels = Gtk.ListStore(str)
         self.core_config = {}
 
     def show(self, options=None, watchdir_id=None):
         if options is None:
             options = {}
-        self.builder = gtk.Builder()
+        self.builder = Gtk.Builder()
         self.builder.add_from_file(get_resource('autoadd_options.ui'))
-        self.builder.connect_signals({
-            'on_opts_add': self.on_add,
-            'on_opts_apply': self.on_apply,
-            'on_opts_cancel': self.on_cancel,
-            'on_options_dialog_close': self.on_cancel,
-            'on_toggle_toggled': self.on_toggle_toggled
-        })
+        self.builder.connect_signals(
+            {
+                'on_opts_add': self.on_add,
+                'on_opts_apply': self.on_apply,
+                'on_opts_cancel': self.on_cancel,
+                'on_options_dialog_close': self.on_cancel,
+                'on_toggle_toggled': self.on_toggle_toggled,
+            }
+        )
         self.dialog = self.builder.get_object('options_dialog')
         self.dialog.set_transient_for(component.get('Preferences').pref_dialog)
 
@@ -91,37 +106,45 @@ class OptionsDialog(object):
         self.builder.get_object('delete_copy_torrent_toggle').set_active(
             options.get('delete_copy_torrent_toggle', False)
         )
-        self.builder.get_object('seed_mode').set_active(
-            options.get('seed_mode', False)
-        )
+        self.builder.get_object('seed_mode').set_active(options.get('seed_mode', False))
         self.accounts.clear()
         self.labels.clear()
         combobox = self.builder.get_object('OwnerCombobox')
-        combobox_render = gtk.CellRendererText()
+        combobox_render = Gtk.CellRendererText()
         combobox.pack_start(combobox_render, True)
         combobox.add_attribute(combobox_render, 'text', 0)
         combobox.set_model(self.accounts)
 
         label_widget = self.builder.get_object('label')
-        label_widget.child.set_text(options.get('label', ''))
+        label_widget.get_child().set_text(options.get('label', ''))
         label_widget.set_model(self.labels)
         label_widget.set_entry_text_column(0)
-        self.builder.get_object('label_toggle').set_active(options.get('label_toggle', False))
+        self.builder.get_object('label_toggle').set_active(
+            options.get('label_toggle', False)
+        )
 
         for spin_id in self.spin_ids + self.spin_int_ids:
             self.builder.get_object(spin_id).set_value(options.get(spin_id, 0))
-            self.builder.get_object(spin_id + '_toggle').set_active(options.get(spin_id + '_toggle', False))
+            self.builder.get_object(spin_id + '_toggle').set_active(
+                options.get(spin_id + '_toggle', False)
+            )
         for chk_id in self.chk_ids:
             self.builder.get_object(chk_id).set_active(bool(options.get(chk_id, True)))
-            self.builder.get_object(chk_id + '_toggle').set_active(options.get(chk_id + '_toggle', False))
+            self.builder.get_object(chk_id + '_toggle').set_active(
+                options.get(chk_id + '_toggle', False)
+            )
         if not options.get('add_paused', True):
             self.builder.get_object('isnt_add_paused').set_active(True)
         if not options.get('queue_to_top', True):
             self.builder.get_object('isnt_queue_to_top').set_active(True)
         if not options.get('auto_managed', True):
             self.builder.get_object('isnt_auto_managed').set_active(True)
-        for field in ['move_completed_path', 'path', 'download_location',
-                      'copy_torrent']:
+        for field in [
+            'move_completed_path',
+            'path',
+            'download_location',
+            'copy_torrent',
+        ]:
             if client.is_localhost():
                 self.builder.get_object(field + '_chooser').set_current_folder(
                     options.get(field, os.path.expanduser('~'))
@@ -143,8 +166,12 @@ class OptionsDialog(object):
                 )
                 if options.get('move_completed_toggle', config['move_completed']):
                     self.builder.get_object('move_completed_toggle').set_active(True)
-                    self.builder.get_object('move_completed_path_chooser').set_current_folder(
-                        options.get('move_completed_path', config['move_completed_path'])
+                    self.builder.get_object(
+                        'move_completed_path_chooser'
+                    ).set_current_folder(
+                        options.get(
+                            'move_completed_path', config['move_completed_path']
+                        )
                     )
                 if options.get('copy_torrent_toggle', config['copy_torrent_file']):
                     self.builder.get_object('copy_torrent_toggle').set_active(True)
@@ -160,7 +187,9 @@ class OptionsDialog(object):
                         options.get('move_completed_toggle', False)
                     )
                     self.builder.get_object('move_completed_path_entry').set_text(
-                        options.get('move_completed_path', config['move_completed_path'])
+                        options.get(
+                            'move_completed_path', config['move_completed_path']
+                        )
                     )
                 if options.get('copy_torrent_toggle', config['copy_torrent_file']):
                     self.builder.get_object('copy_torrent_toggle').set_active(True)
@@ -168,7 +197,9 @@ class OptionsDialog(object):
                         options.get('copy_torrent', config['torrentfiles_location'])
                     )
 
-            if options.get('delete_copy_torrent_toggle', config['del_copy_torrent_file']):
+            if options.get(
+                'delete_copy_torrent_toggle', config['del_copy_torrent_file']
+            ):
                 self.builder.get_object('delete_copy_torrent_toggle').set_active(True)
 
         if not options:
@@ -179,9 +210,7 @@ class OptionsDialog(object):
             selected_iter = None
             for account in accounts:
                 acc_iter = self.accounts.append()
-                self.accounts.set_value(
-                    acc_iter, 0, account['username']
-                )
+                self.accounts.set_value(acc_iter, 0, account['username'])
                 if account['username'] == owner:
                     selected_iter = acc_iter
             self.builder.get_object('OwnerCombobox').set_active_iter(selected_iter)
@@ -224,16 +253,26 @@ class OptionsDialog(object):
             self.builder.get_object('OwnerCombobox').set_sensitive(False)
 
     def set_sensitive(self):
-        maintoggles = ['download_location', 'append_extension',
-                       'move_completed', 'label', 'max_download_speed',
-                       'max_upload_speed', 'max_connections',
-                       'max_upload_slots', 'add_paused', 'auto_managed',
-                       'stop_at_ratio', 'queue_to_top', 'copy_torrent']
+        maintoggles = [
+            'download_location',
+            'append_extension',
+            'move_completed',
+            'label',
+            'max_download_speed',
+            'max_upload_speed',
+            'max_connections',
+            'max_upload_slots',
+            'add_paused',
+            'auto_managed',
+            'stop_at_ratio',
+            'queue_to_top',
+            'copy_torrent',
+        ]
         for maintoggle in maintoggles:
             self.on_toggle_toggled(self.builder.get_object(maintoggle + '_toggle'))
 
     def on_toggle_toggled(self, tb):
-        toggle = str(tb.name).replace('_toggle', '')
+        toggle = tb.get_name().replace('_toggle', '')
         isactive = tb.get_active()
         if toggle == 'download_location':
             self.builder.get_object('download_location_chooser').set_sensitive(isactive)
@@ -243,9 +282,13 @@ class OptionsDialog(object):
         elif toggle == 'copy_torrent':
             self.builder.get_object('copy_torrent_entry').set_sensitive(isactive)
             self.builder.get_object('copy_torrent_chooser').set_sensitive(isactive)
-            self.builder.get_object('delete_copy_torrent_toggle').set_sensitive(isactive)
+            self.builder.get_object('delete_copy_torrent_toggle').set_sensitive(
+                isactive
+            )
         elif toggle == 'move_completed':
-            self.builder.get_object('move_completed_path_chooser').set_sensitive(isactive)
+            self.builder.get_object('move_completed_path_chooser').set_sensitive(
+                isactive
+            )
             self.builder.get_object('move_completed_path_entry').set_sensitive(isactive)
             self.builder.get_object('move_completed').set_active(isactive)
         elif toggle == 'label':
@@ -277,9 +320,9 @@ class OptionsDialog(object):
     def on_apply(self, event=None):
         try:
             options = self.generate_opts()
-            client.autoadd.set_options(
-                str(self.watchdir_id), options
-            ).addCallbacks(self.on_added, self.on_error_show)
+            client.autoadd.set_options(str(self.watchdir_id), options).addCallbacks(
+                self.on_added, self.on_error_show
+            )
         except IncompatibleOption as ex:
             dialogs.ErrorDialog(_('Incompatible Option'), str(ex), self.dialog).run()
 
@@ -308,50 +351,80 @@ class OptionsDialog(object):
         if client.is_localhost():
             options['path'] = self.builder.get_object('path_chooser').get_filename()
             options['download_location'] = self.builder.get_object(
-                'download_location_chooser').get_filename()
+                'download_location_chooser'
+            ).get_filename()
             options['move_completed_path'] = self.builder.get_object(
-                'move_completed_path_chooser').get_filename()
+                'move_completed_path_chooser'
+            ).get_filename()
             options['copy_torrent'] = self.builder.get_object(
-                'copy_torrent_chooser').get_filename()
+                'copy_torrent_chooser'
+            ).get_filename()
         else:
             options['path'] = self.builder.get_object('path_entry').get_text()
             options['download_location'] = self.builder.get_object(
-                'download_location_entry').get_text()
+                'download_location_entry'
+            ).get_text()
             options['move_completed_path'] = self.builder.get_object(
-                'move_completed_path_entry').get_text()
+                'move_completed_path_entry'
+            ).get_text()
             options['copy_torrent'] = self.builder.get_object(
-                'copy_torrent_entry').get_text()
+                'copy_torrent_entry'
+            ).get_text()
 
-        options['label'] = self.builder.get_object('label').child.get_text().lower()
-        options['append_extension'] = self.builder.get_object('append_extension').get_text()
+        options['label'] = (
+            self.builder.get_object('label').get_child().get_text().lower()
+        )
+        options['append_extension'] = self.builder.get_object(
+            'append_extension'
+        ).get_text()
         options['owner'] = self.accounts[
-            self.builder.get_object('OwnerCombobox').get_active()][0]
+            self.builder.get_object('OwnerCombobox').get_active()
+        ][0]
 
-        for key in ['append_extension_toggle', 'download_location_toggle',
-                    'label_toggle', 'copy_torrent_toggle',
-                    'delete_copy_torrent_toggle', 'seed_mode']:
+        for key in [
+            'append_extension_toggle',
+            'download_location_toggle',
+            'label_toggle',
+            'copy_torrent_toggle',
+            'delete_copy_torrent_toggle',
+            'seed_mode',
+        ]:
             options[key] = self.builder.get_object(key).get_active()
 
         for spin_id in self.spin_ids:
             options[spin_id] = self.builder.get_object(spin_id).get_value()
-            options[spin_id + '_toggle'] = self.builder.get_object(spin_id + '_toggle').get_active()
+            options[spin_id + '_toggle'] = self.builder.get_object(
+                spin_id + '_toggle'
+            ).get_active()
         for spin_int_id in self.spin_int_ids:
-            options[spin_int_id] = self.builder.get_object(spin_int_id).get_value_as_int()
-            options[spin_int_id + '_toggle'] = self.builder.get_object(spin_int_id + '_toggle').get_active()
+            options[spin_int_id] = self.builder.get_object(
+                spin_int_id
+            ).get_value_as_int()
+            options[spin_int_id + '_toggle'] = self.builder.get_object(
+                spin_int_id + '_toggle'
+            ).get_active()
         for chk_id in self.chk_ids:
             options[chk_id] = self.builder.get_object(chk_id).get_active()
-            options[chk_id + '_toggle'] = self.builder.get_object(chk_id + '_toggle').get_active()
+            options[chk_id + '_toggle'] = self.builder.get_object(
+                chk_id + '_toggle'
+            ).get_active()
 
-        if options['copy_torrent_toggle'] and options['path'] == options['copy_torrent']:
-            raise IncompatibleOption(_('"Watch Folder" directory and "Copy of .torrent'
-                                       ' files to" directory cannot be the same!'))
+        if (
+            options['copy_torrent_toggle']
+            and options['path'] == options['copy_torrent']
+        ):
+            raise IncompatibleOption(
+                _(
+                    '"Watch Folder" directory and "Copy of .torrent'
+                    ' files to" directory cannot be the same!'
+                )
+            )
         return options
 
 
-class GtkUI(GtkPluginBase):
+class GtkUI(Gtk3PluginBase):
     def enable(self):
-
-        self.builder = gtk.Builder()
+        self.builder = Gtk.Builder()
         self.builder.add_from_file(get_resource('config.ui'))
         self.builder.connect_signals(self)
         self.opts_dialog = OptionsDialog()
@@ -369,15 +442,15 @@ class GtkUI(GtkPluginBase):
         self.watchdirs = {}
 
         vbox = self.builder.get_object('watchdirs_vbox')
-        sw = gtk.ScrolledWindow()
-        sw.set_shadow_type(gtk.SHADOW_ETCHED_IN)
-        sw.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+        sw = Gtk.ScrolledWindow()
+        sw.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
 
         vbox.pack_start(sw, True, True, 0)
 
         self.store = self.create_model()
 
-        self.treeView = gtk.TreeView(self.store)
+        self.treeView = Gtk.TreeView(self.store)
         self.treeView.connect('cursor-changed', self.on_listitem_activated)
         self.treeView.connect('row-activated', self.on_edit_button_clicked)
         self.treeView.set_rules_hint(True)
@@ -399,38 +472,42 @@ class GtkUI(GtkPluginBase):
         )
 
     def create_model(self):
-        store = gtk.ListStore(str, bool, str, str)
+        store = Gtk.ListStore(str, bool, str, str)
         for watchdir_id, watchdir in self.watchdirs.items():
-            store.append([
-                watchdir_id, watchdir['enabled'],
-                watchdir.get('owner', 'localclient'), watchdir['path']
-            ])
+            store.append(
+                [
+                    watchdir_id,
+                    watchdir['enabled'],
+                    watchdir.get('owner', 'localclient'),
+                    watchdir['path'],
+                ]
+            )
         return store
 
     def create_columns(self, treeview):
-        renderer_toggle = gtk.CellRendererToggle()
-        column = gtk.TreeViewColumn(
+        renderer_toggle = Gtk.CellRendererToggle()
+        column = Gtk.TreeViewColumn(
             _('Active'), renderer_toggle, activatable=1, active=1
         )
         column.set_sort_column_id(1)
         treeview.append_column(column)
-        tt = gtk.Tooltip()
+        tt = Gtk.Tooltip()
         tt.set_text(_('Double-click to toggle'))
         treeview.set_tooltip_cell(tt, None, None, renderer_toggle)
 
-        renderertext = gtk.CellRendererText()
-        column = gtk.TreeViewColumn(_('Owner'), renderertext, text=2)
+        renderertext = Gtk.CellRendererText()
+        column = Gtk.TreeViewColumn(_('Owner'), renderertext, text=2)
         column.set_sort_column_id(2)
         treeview.append_column(column)
-        tt2 = gtk.Tooltip()
+        tt2 = Gtk.Tooltip()
         tt2.set_text(_('Double-click to edit'))
         treeview.set_has_tooltip(True)
 
-        renderertext = gtk.CellRendererText()
-        column = gtk.TreeViewColumn(_('Path'), renderertext, text=3)
+        renderertext = Gtk.CellRendererText()
+        column = Gtk.TreeViewColumn(_('Path'), renderertext, text=3)
         column.set_sort_column_id(3)
         treeview.append_column(column)
-        tt2 = gtk.Tooltip()
+        tt2 = Gtk.Tooltip()
         tt2.set_text(_('Double-click to edit'))
         treeview.set_has_tooltip(True)
 
@@ -488,10 +565,14 @@ class GtkUI(GtkPluginBase):
         self.watchdirs = watchdirs or {}
         self.store.clear()
         for watchdir_id, watchdir in self.watchdirs.items():
-            self.store.append([
-                watchdir_id, watchdir['enabled'],
-                watchdir.get('owner', 'localclient'), watchdir['path']
-            ])
+            self.store.append(
+                [
+                    watchdir_id,
+                    watchdir['enabled'],
+                    watchdir.get('owner', 'localclient'),
+                    watchdir['path'],
+                ]
+            )
         # Workaround for cached glade signal appearing when re-enabling plugin in same session
         if self.builder.get_object('edit_button'):
             # Disable the remove and edit buttons, because nothing in the store is selected

@@ -1,6 +1,6 @@
-/*!
+/**
  * Ext.ux.form.SpinnerField.js
- * 
+ *
  * Copyright (c) Damien Churchill 2010 <damoxc@gmail.com>
  *
  * This file is part of Deluge and is licensed under GNU General Public License 3.0, or later, with
@@ -9,5 +9,5 @@
  */
 
 Ext.override(Ext.ux.form.SpinnerField, {
-    onBlur: Ext.form.Field.prototype.onBlur
+    onBlur: Ext.form.Field.prototype.onBlur,
 });

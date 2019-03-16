@@ -22,12 +22,15 @@ class BaseTestCase(unittest.TestCase):
     have finished.
 
     """
+
     def setUp(self):  # NOQA: N803
 
         if len(component._ComponentRegistry.components) != 0:
-            warnings.warn('The component._ComponentRegistry.components is not empty on test setup.\n'
-                          'This is probably caused by another test that did not clean up after finishing!: %s' %
-                          component._ComponentRegistry.components)
+            warnings.warn(
+                'The component._ComponentRegistry.components is not empty on test setup.\n'
+                'This is probably caused by another test that did not clean up after finishing!: %s'
+                % component._ComponentRegistry.components
+            )
         d = maybeDeferred(self.set_up)
 
         def on_setup_error(error):

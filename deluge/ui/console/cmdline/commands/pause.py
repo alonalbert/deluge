@@ -18,11 +18,16 @@ from . import BaseCommand
 
 class Command(BaseCommand):
     """Pause torrents"""
+
     usage = 'pause [ * | <torrent-id> [<torrent-id> ...] ]'
 
     def add_arguments(self, parser):
-        parser.add_argument('torrent_ids', metavar='<torrent-id>', nargs='+',
-                            help=_('One or more torrent ids. Use "*" to pause all torrents'))
+        parser.add_argument(
+            'torrent_ids',
+            metavar='<torrent-id>',
+            nargs='+',
+            help=_('One or more torrent ids. Use "*" to pause all torrents'),
+        )
 
     def handle(self, options):
         self.console = component.get('ConsoleUI')

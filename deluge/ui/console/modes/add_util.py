@@ -11,10 +11,12 @@
 
 from __future__ import unicode_literals
 
-import base64
 import glob
 import logging
 import os
+from base64 import b64encode
+
+from six import unichr as chr
 
 import deluge.common
 from deluge.ui.client import client
@@ -27,14 +29,16 @@ def _bracket_fixup(path):
     if path.find('[') == -1 and path.find(']') == -1:
         return path
     sentinal = 256
-    while path.find(unichr(sentinal)) != -1:
+    while path.find(chr(sentinal)) != -1:
         sentinal += 1
         if sentinal > 65535:
-            log.error('Cannot fix brackets in path, path contains all possible sentinal characters')
+            log.error(
+                'Cannot fix brackets in path, path contains all possible sentinal characters'
+            )
             return path
-    newpath = path.replace(']', unichr(sentinal))
+    newpath = path.replace(']', chr(sentinal))
     newpath = newpath.replace('[', '[[]')
-    newpath = newpath.replace(unichr(sentinal), '[]]')
+    newpath = newpath.replace(chr(sentinal), '[]]')
     return newpath
 
 
@@ -44,8 +48,12 @@ def add_torrent(t_file, options, success_cb, fail_cb, ress):
         t_options['download_location'] = os.path.expanduser(options['path'])
     t_options['add_paused'] = options['add_paused']
 
-    is_url = (options['path_type'] != 1) and (deluge.common.is_url(t_file) or options['path_type'] == 2)
-    is_magnet = not(is_url) and (options['path_type'] != 1) and deluge.common.is_magnet(t_file)
+    is_url = (options['path_type'] != 1) and (
+        deluge.common.is_url(t_file) or options['path_type'] == 2
+    )
+    is_magnet = (
+        not (is_url) and (options['path_type'] != 1) and deluge.common.is_magnet(t_file)
+    )
 
     if is_url or is_magnet:
         files = [t_file]
@@ -59,9 +67,13 @@ def add_torrent(t_file, options, success_cb, fail_cb, ress):
 
     for f in files:
         if is_url:
-            client.core.add_torrent_url(f, t_options).addCallback(success_cb, f, ress).addErrback(fail_cb, f, ress)
+            client.core.add_torrent_url(f, t_options).addCallback(
+                success_cb, f, ress
+            ).addErrback(fail_cb, f, ress)
         elif is_magnet:
-            client.core.add_torrent_magnet(f, t_options).addCallback(success_cb, f, ress).addErrback(fail_cb, f, ress)
+            client.core.add_torrent_magnet(f, t_options).addCallback(
+                success_cb, f, ress
+            ).addErrback(fail_cb, f, ress)
         else:
             if not os.path.exists(f):
                 fail_cb('Does not exist', f, ress)
@@ -78,7 +90,7 @@ def add_torrent(t_file, options, success_cb, fail_cb, ress):
 
             filename = os.path.split(f)[-1]
             with open(f, 'rb') as _file:
-                filedump = base64.encodestring(_file.read())
+                filedump = b64encode(_file.read())
 
             client.core.add_torrent_file_async(
                 filename, filedump, t_options

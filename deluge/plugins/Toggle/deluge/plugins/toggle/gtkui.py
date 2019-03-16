@@ -17,19 +17,23 @@ from __future__ import unicode_literals
 import logging
 
 import deluge.component as component
-from deluge.plugins.pluginbase import GtkPluginBase
+from deluge.plugins.pluginbase import Gtk3PluginBase
 from deluge.ui.client import client
 
 log = logging.getLogger(__name__)
 
 
-class GtkUI(GtkPluginBase):
+class GtkUI(Gtk3PluginBase):
     def enable(self):
         self.core = client.toggle
         self.plugin = component.get('PluginManager')
         self.separator = self.plugin.add_toolbar_separator()
-        self.button = self.plugin.add_toolbar_button(self._on_button_clicked, label='Pause Session',
-                                                     stock='gtk-media-pause', tooltip='Pause the session')
+        self.button = self.plugin.add_toolbar_button(
+            self._on_button_clicked,
+            label='Pause Session',
+            stock='gtk-media-pause',
+            tooltip='Pause the session',
+        )
 
     def disable(self):
         component.get('PluginManager').remove_toolbar_button(self.button)
@@ -45,6 +49,7 @@ class GtkUI(GtkPluginBase):
                 self.button.set_label('Pause Session')
                 self.button.set_tooltip_text('Pause the session')
                 self.button.set_stock_id('gtk-media-pause')
+
         self.core.get_status().addCallback(_on_get_status)
 
     def _on_button_clicked(self, widget):

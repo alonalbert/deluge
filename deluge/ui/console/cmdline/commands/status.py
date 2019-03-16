@@ -26,11 +26,25 @@ class Command(BaseCommand):
     """Shows various status information from the daemon"""
 
     def add_arguments(self, parser):
-        parser.add_argument('-r', '--raw', action='store_true', default=False, dest='raw',
-                            help=_('Raw values for upload/download rates (without KiB/s suffix)'
-                                   '(useful for scripts that want to do their own parsing)'))
-        parser.add_argument('-n', '--no-torrents', action='store_false', default=True, dest='show_torrents',
-                            help=_('Do not show torrent status (Improves command speed)'))
+        parser.add_argument(
+            '-r',
+            '--raw',
+            action='store_true',
+            default=False,
+            dest='raw',
+            help=_(
+                'Raw values for upload/download rates (without KiB/s suffix)'
+                '(useful for scripts that want to do their own parsing)'
+            ),
+        )
+        parser.add_argument(
+            '-n',
+            '--no-torrents',
+            action='store_false',
+            default=True,
+            dest='show_torrents',
+            help=_('Do not show torrent status (Improves command speed)'),
+        )
 
     def handle(self, options):
         self.console = component.get('ConsoleUI')
@@ -45,12 +59,14 @@ class Command(BaseCommand):
             self.torrents = status
 
         def on_torrents_status_fail(reason):
-            log.warn('Failed to retrieve session status: %s', reason)
+            log.warning('Failed to retrieve session status: %s', reason)
             self.torrents = -2
 
         deferreds = []
 
-        ds = client.core.get_session_status(['num_peers', 'payload_upload_rate', 'payload_download_rate', 'dht_nodes'])
+        ds = client.core.get_session_status(
+            ['num_peers', 'payload_upload_rate', 'payload_download_rate', 'dht_nodes']
+        )
         ds.addCallback(on_session_status)
         deferreds.append(ds)
 
@@ -65,11 +81,20 @@ class Command(BaseCommand):
     def print_status(self, *args):
         self.console.set_batch_write(True)
         if self.raw:
-            self.console.write('{!info!}Total upload: %f' % self.status['payload_upload_rate'])
-            self.console.write('{!info!}Total download: %f' % self.status['payload_download_rate'])
+            self.console.write(
+                '{!info!}Total upload: %f' % self.status['payload_upload_rate']
+            )
+            self.console.write(
+                '{!info!}Total download: %f' % self.status['payload_download_rate']
+            )
         else:
-            self.console.write('{!info!}Total upload: %s' % fspeed(self.status['payload_upload_rate']))
-            self.console.write('{!info!}Total download: %s' % fspeed(self.status['payload_download_rate']))
+            self.console.write(
+                '{!info!}Total upload: %s' % fspeed(self.status['payload_upload_rate'])
+            )
+            self.console.write(
+                '{!info!}Total download: %s'
+                % fspeed(self.status['payload_download_rate'])
+            )
         self.console.write('{!info!}DHT Nodes: %i' % self.status['dht_nodes'])
 
         if isinstance(self.torrents, int):

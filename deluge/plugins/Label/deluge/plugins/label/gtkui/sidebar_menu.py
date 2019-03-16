@@ -12,11 +12,18 @@ from __future__ import unicode_literals
 
 import logging
 
-import gtk
+import gi  # isort:skip (Required before Gtk import).
 
+gi.require_version('Gtk', '3.0')  # NOQA: E402
+
+# isort:imports-thirdparty
+from gi.repository import Gtk
+
+# isort:imports-firstparty
 import deluge.component as component
 from deluge.ui.client import client
 
+# isort:imports-localfolder
 from ..common import get_resource
 
 log = logging.getLogger(__name__)
@@ -33,12 +40,12 @@ class LabelSidebarMenu(object):
         self.items = []
 
         # add items, in reverse order, because they are prepended.
-        sep = gtk.SeparatorMenuItem()
+        sep = Gtk.SeparatorMenuItem()
         self.items.append(sep)
         self.menu.prepend(sep)
-        self._add_item('options', _('Label _Options'), gtk.STOCK_PREFERENCES)
-        self._add_item('remove', _('_Remove Label'), gtk.STOCK_REMOVE)
-        self._add_item('add', _('_Add Label'), gtk.STOCK_ADD)
+        self._add_item('options', _('Label _Options'))
+        self._add_item('remove', _('_Remove Label'))
+        self._add_item('add', _('_Add Label'))
 
         self.menu.show_all()
         # dialogs:
@@ -47,13 +54,12 @@ class LabelSidebarMenu(object):
         # hooks:
         self.menu.connect('show', self.on_show, None)
 
-    def _add_item(self, item_id, label, stock):
-        """I hate glade.
+    def _add_item(self, item_id, label):
+        """
         id is automatically-added as self.item_<id>
         """
+        item = Gtk.MenuItem.new_with_mnemonic(label)
         func = getattr(self, 'on_%s' % item_id)
-        item = gtk.ImageMenuItem(stock)
-        item.get_children()[0].set_label(label)
         item.connect('activate', func)
         self.menu.prepend(item)
         setattr(self, 'item_%s' % item_id, item)
@@ -70,7 +76,7 @@ class LabelSidebarMenu(object):
         self.options_dialog.show(self.treeview.value)
 
     def on_show(self, widget=None, data=None):
-        'No Label:disable options/del'
+        """No Label:disable options/del."""
         log.debug('label-sidebar-popup:on-show')
 
         cat = self.treeview.cat
@@ -80,7 +86,7 @@ class LabelSidebarMenu(object):
             for item in self.items:
                 item.show()
             # default items
-            sensitive = ((label not in (NO_LABEL, None, '', 'All')) and (cat != 'cat'))
+            sensitive = (label not in (NO_LABEL, None, '', 'All')) and (cat != 'cat')
             for item in self.items:
                 item.set_sensitive(sensitive)
 
@@ -106,7 +112,7 @@ class AddDialog(object):
         pass
 
     def show(self):
-        self.builder = gtk.Builder()
+        self.builder = Gtk.Builder()
         self.builder.add_from_file(get_resource('label_add.ui'))
         self.dialog = self.builder.get_object('dlg_label_add')
         self.dialog.set_transient_for(component.get('MainWindow').window)
@@ -126,17 +132,34 @@ class AddDialog(object):
 class OptionsDialog(object):
     spin_ids = ['max_download_speed', 'max_upload_speed', 'stop_ratio']
     spin_int_ids = ['max_upload_slots', 'max_connections']
-    chk_ids = ['apply_max', 'apply_queue', 'stop_at_ratio', 'apply_queue', 'remove_at_ratio',
-               'apply_move_completed', 'move_completed', 'is_auto_managed', 'auto_add']
+    chk_ids = [
+        'apply_max',
+        'apply_queue',
+        'stop_at_ratio',
+        'apply_queue',
+        'remove_at_ratio',
+        'apply_move_completed',
+        'move_completed',
+        'is_auto_managed',
+        'auto_add',
+    ]
 
     # list of tuples, because order matters when nesting.
     sensitive_groups = [
-        ('apply_max', ['max_download_speed', 'max_upload_speed', 'max_upload_slots', 'max_connections']),
+        (
+            'apply_max',
+            [
+                'max_download_speed',
+                'max_upload_speed',
+                'max_upload_slots',
+                'max_connections',
+            ],
+        ),
         ('apply_queue', ['is_auto_managed', 'stop_at_ratio']),
         ('stop_at_ratio', ['remove_at_ratio', 'stop_ratio']),  # nested
         ('apply_move_completed', ['move_completed']),
         ('move_completed', ['move_completed_path']),  # nested
-        ('auto_add', ['auto_add_trackers'])
+        ('auto_add', ['auto_add_trackers']),
     ]
 
     def __init__(self):
@@ -144,13 +167,15 @@ class OptionsDialog(object):
 
     def show(self, label):
         self.label = label
-        self.builder = gtk.Builder()
+        self.builder = Gtk.Builder()
         self.builder.add_from_file(get_resource('label_options.ui'))
         self.dialog = self.builder.get_object('dlg_label_options')
         self.dialog.set_transient_for(component.get('MainWindow').window)
         self.builder.connect_signals(self)
         # Show the label name in the header label
-        self.builder.get_object('label_header').set_markup('<b>%s:</b> %s' % (_('Label Options'), self.label))
+        self.builder.get_object('label_header').set_markup(
+            '<b>%s:</b> %s' % (_('Label Options'), self.label)
+        )
 
         for chk_id, group in self.sensitive_groups:
             chk = self.builder.get_object(chk_id)
@@ -169,37 +194,59 @@ class OptionsDialog(object):
             self.builder.get_object(chk_id).set_active(bool(options[chk_id]))
 
         if client.is_localhost():
-            self.builder.get_object('move_completed_path').set_filename(options['move_completed_path'])
+            self.builder.get_object('move_completed_path').set_filename(
+                options['move_completed_path']
+            )
             self.builder.get_object('move_completed_path').show()
             self.builder.get_object('move_completed_path_entry').hide()
         else:
-            self.builder.get_object('move_completed_path_entry').set_text(options['move_completed_path'])
+            self.builder.get_object('move_completed_path_entry').set_text(
+                options['move_completed_path']
+            )
             self.builder.get_object('move_completed_path_entry').show()
             self.builder.get_object('move_completed_path').hide()
 
-        self.builder.get_object('auto_add_trackers').get_buffer().set_text('\n'.join(options['auto_add_trackers']))
+        self.builder.get_object('auto_add_trackers').get_buffer().set_text(
+            '\n'.join(options['auto_add_trackers'])
+        )
 
         self.apply_sensitivity()
 
     def on_options_ok(self, event=None):
-        'save options..'
+        """Save options."""
         options = {}
 
         for spin_id in self.spin_ids:
             options[spin_id] = self.builder.get_object(spin_id).get_value()
         for spin_int_id in self.spin_int_ids:
-            options[spin_int_id] = self.builder.get_object(spin_int_id).get_value_as_int()
+            options[spin_int_id] = self.builder.get_object(
+                spin_int_id
+            ).get_value_as_int()
         for chk_id in self.chk_ids:
             options[chk_id] = self.builder.get_object(chk_id).get_active()
 
         if client.is_localhost():
-            options['move_completed_path'] = self.builder.get_object('move_completed_path').get_filename()
+            options['move_completed_path'] = self.builder.get_object(
+                'move_completed_path'
+            ).get_filename()
         else:
-            options['move_completed_path'] = self.builder.get_object('move_completed_path_entry').get_text()
+            options['move_completed_path'] = self.builder.get_object(
+                'move_completed_path_entry'
+            ).get_text()
 
-        buff = self.builder.get_object('auto_add_trackers').get_buffer()  # sometimes I hate gtk...
-        tracker_lst = buff.get_text(buff.get_start_iter(), buff.get_end_iter()).strip().split('\n')
-        options['auto_add_trackers'] = [x for x in tracker_lst if x]  # filter out empty lines.
+        buff = self.builder.get_object(
+            'auto_add_trackers'
+        ).get_buffer()  # sometimes I hate gtk...
+        tracker_lst = (
+            buff.get_text(
+                buff.get_start_iter(), buff.get_end_iter(), include_hidden_chars=False
+            )
+            .strip()
+            .split('\n')
+        )
+        options['auto_add_trackers'] = [
+            x for x in tracker_lst if x
+        ]  # filter out empty lines.
 
         log.debug(options)
         client.label.set_options(self.label, options)

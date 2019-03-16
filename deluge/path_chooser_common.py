@@ -12,14 +12,19 @@ from __future__ import unicode_literals
 
 import os
 
+from deluge.common import PY2
+
 
 def is_hidden(filepath):
     def has_hidden_attribute(filepath):
         import win32api
         import win32con
+
         try:
             attribute = win32api.GetFileAttributes(filepath)
-            return attribute & (win32con.FILE_ATTRIBUTE_HIDDEN | win32con.FILE_ATTRIBUTE_SYSTEM)
+            return attribute & (
+                win32con.FILE_ATTRIBUTE_HIDDEN | win32con.FILE_ATTRIBUTE_SYSTEM
+            )
         except (AttributeError, AssertionError):
             return False
 
@@ -49,7 +54,10 @@ def get_completion_paths(args):
 
     def get_subdirs(dirname):
         try:
-            return os.walk(dirname).next()[1]
+            if PY2:
+                return os.walk(dirname).__next__[1]
+            else:
+                return next(os.walk(dirname))[1]
         except StopIteration:
             # Invalid dirname
             return []

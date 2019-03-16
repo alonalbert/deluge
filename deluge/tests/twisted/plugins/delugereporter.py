@@ -19,7 +19,9 @@ from zope.interface import implements
 class _Reporter(object):
     implements(IPlugin, IReporter)
 
-    def __init__(self, name, module, description, longOpt, shortOpt, klass):  # NOQA: N803
+    def __init__(  # NOQA: N803
+        self, name, module, description, longOpt, shortOpt, klass
+    ):
         self.name = name
         self.module = module
         self.description = description
@@ -28,16 +30,17 @@ class _Reporter(object):
         self.klass = klass
 
 
-deluge = _Reporter('Deluge reporter that suppresses Stacktrace from TODO tests',
-                   'twisted.plugins.delugereporter',
-                   description='Deluge Reporter',
-                   longOpt='deluge-reporter',
-                   shortOpt=None,
-                   klass='DelugeReporter')
+deluge = _Reporter(
+    'Deluge reporter that suppresses Stacktrace from TODO tests',
+    'twisted.plugins.delugereporter',
+    description='Deluge Reporter',
+    longOpt='deluge-reporter',
+    shortOpt=None,
+    klass='DelugeReporter',
+)
 
 
 class DelugeReporter(TreeReporter):
-
     def __init__(self, *args, **kwargs):
         os.environ['DELUGE_REPORTER'] = 'true'
         TreeReporter.__init__(self, *args, **kwargs)

@@ -31,7 +31,6 @@ class PluginBase(component.Component):
 
 
 class CorePluginBase(PluginBase):
-
     def __init__(self, plugin_name):
         super(CorePluginBase, self).__init__('CorePlugin.' + plugin_name)
         # Register RPC methods
@@ -48,17 +47,16 @@ class CorePluginBase(PluginBase):
         super(CorePluginBase, self).disable()
 
 
-class GtkPluginBase(PluginBase):
-
+class Gtk3PluginBase(PluginBase):
     def __init__(self, plugin_name):
-        super(GtkPluginBase, self).__init__('GtkPlugin.' + plugin_name)
-        log.debug('GtkPlugin initialized..')
+        super(Gtk3PluginBase, self).__init__('Gtk3Plugin.' + plugin_name)
+        log.debug('Gtk3Plugin initialized..')
 
     def enable(self):
-        super(GtkPluginBase, self).enable()
+        super(Gtk3PluginBase, self).enable()
 
     def disable(self):
-        super(GtkPluginBase, self).disable()
+        super(Gtk3PluginBase, self).disable()
 
 
 class WebPluginBase(PluginBase):

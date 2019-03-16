@@ -41,13 +41,15 @@ version as this will be done internally.
 """
 from __future__ import unicode_literals
 
-import cPickle as pickle
 import json
 import logging
 import os
 import shutil
 from codecs import getwriter
 from io import open
+from tempfile import NamedTemporaryFile
+
+import six.moves.cPickle as pickle
 
 from deluge.common import JSON_FORMAT, get_default_config_dir
 
@@ -120,16 +122,14 @@ class Config(object):
             setup to convert old config files. (default: 1)
 
     """
+
     def __init__(self, filename, defaults=None, config_dir=None, file_version=1):
         self.__config = {}
         self.__set_functions = {}
         self.__change_callbacks = []
 
         # These hold the version numbers and they will be set when loaded
-        self.__version = {
-            'format': 1,
-            'file': file_version
-        }
+        self.__version = {'format': 1, 'file': file_version}
 
         # This will get set with a reactor.callLater whenever a config option
         # is set.
@@ -187,18 +187,21 @@ class Config(object):
         if self.__config[key] == value:
             return
 
-        # Do not allow the type to change unless it is None
-        if value is not None and not isinstance(
-                self.__config[key], type(None)) and not isinstance(self.__config[key], type(value)):
+        # Change the value type if it is not None and does not match.
+        type_match = isinstance(self.__config[key], (type(None), type(value)))
+        if value is not None and not type_match:
             try:
                 oldtype = type(self.__config[key])
-                value = oldtype(value)
+                # Don't convert to bytes as requires encoding and value will
+                # be decoded anyway.
+                if oldtype is not bytes:
+                    value = oldtype(value)
             except ValueError:
                 log.warning('Value Type "%s" invalid for key: %s', type(value), key)
                 raise
 
         if isinstance(value, bytes):
-            value.decode('utf8')
+            value = value.decode('utf8')
 
         log.debug('Setting key "%s" to: %s (of type: %s)', key, value, type(value))
         self.__config[key] = value
@@ -206,7 +209,9 @@ class Config(object):
         global callLater
         if callLater is None:
             # Must import here and not at the top or it will throw ReactorAlreadyInstalledError
-            from twisted.internet.reactor import callLater  # pylint: disable=redefined-outer-name
+            from twisted.internet.reactor import (
+                callLater,
+            )  # pylint: disable=redefined-outer-name
         # Run the set_function for this key if any
         try:
             for func in self.__set_functions[key]:
@@ -214,9 +219,11 @@ class Config(object):
         except KeyError:
             pass
         try:
+
             def do_change_callbacks(key, value):
                 for func in self.__change_callbacks:
                     func(key, value)
+
             callLater(0, do_change_callbacks, key, value)
         except Exception:
             pass
@@ -302,7 +309,9 @@ class Config(object):
         global callLater
         if callLater is None:
             # Must import here and not at the top or it will throw ReactorAlreadyInstalledError
-            from twisted.internet.reactor import callLater  # pylint: disable=redefined-outer-name
+            from twisted.internet.reactor import (
+                callLater,
+            )  # pylint: disable=redefined-outer-name
 
         # We set the save_timer for 5 seconds if not already set
         if not self._save_timer or not self._save_timer.active():
@@ -427,8 +436,13 @@ class Config(object):
                 log.exception(ex)
                 log.warning('Unable to load config file: %s', filename)
 
-        log.debug('Config %s version: %s.%s loaded: %s', filename,
-                  self.__version['format'], self.__version['file'], self.__config)
+        log.debug(
+            'Config %s version: %s.%s loaded: %s',
+            filename,
+            self.__version['format'],
+            self.__version['file'],
+            self.__config,
+        )
 
     def save(self, filename=None):
         """Save configuration to disk.
@@ -462,8 +476,11 @@ class Config(object):
 
         # Save the new config and make sure it's written to disk
         try:
-            log.debug('Saving new config file %s', filename + '.new')
-            with open(filename + '.new', 'wb') as _file:
+            with NamedTemporaryFile(
+                prefix=os.path.basename(filename) + '.', delete=False
+            ) as _file:
+                filename_tmp = _file.name
+                log.debug('Saving new config file %s', filename_tmp)
                 json.dump(self.__version, getwriter('utf8')(_file), **JSON_FORMAT)
                 json.dump(self.__config, getwriter('utf8')(_file), **JSON_FORMAT)
                 _file.flush()
@@ -471,6 +488,9 @@ class Config(object):
         except IOError as ex:
             log.error('Error writing new config file: %s', ex)
             return False
+
+        # Resolve symlinked config files before backing up and saving.
+        filename = os.path.realpath(filename)
 
         # Make a backup of the old config
         try:
@@ -482,8 +502,8 @@ class Config(object):
         # The new config file has been written successfully, so let's move it over
         # the existing one.
         try:
-            log.debug('Moving new config file %s to %s..', filename + '.new', filename)
-            shutil.move(filename + '.new', filename)
+            log.debug('Moving new config file %s to %s', filename_tmp, filename)
+            shutil.move(filename_tmp, filename)
         except IOError as ex:
             log.error('Error moving new config file: %s', ex)
             return False
@@ -510,16 +530,23 @@ class Config(object):
             raise ValueError('output_version needs to be greater than input_range')
 
         if self.__version['file'] not in input_range:
-            log.debug('File version %s is not in input_range %s, ignoring converter function..',
-                      self.__version['file'], input_range)
+            log.debug(
+                'File version %s is not in input_range %s, ignoring converter function..',
+                self.__version['file'],
+                input_range,
+            )
             return
 
         try:
             self.__config = func(self.__config)
         except Exception as ex:
             log.exception(ex)
-            log.error('There was an exception try to convert config file %s %s to %s',
-                      self.__config_file, self.__version['file'], output_version)
+            log.error(
+                'There was an exception try to convert config file %s %s to %s',
+                self.__config_file,
+                self.__version['file'],
+                output_version,
+            )
             raise ex
         else:
             self.__version['file'] = output_version
@@ -532,9 +559,11 @@ class Config(object):
     @prop
     def config():  # pylint: disable=no-method-argument
         """The config dictionary"""
+
         def fget(self):
             return self.__config
 
         def fdel(self):
             return self.save()
+
         return locals()

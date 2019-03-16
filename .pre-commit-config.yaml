@@ -1,0 +1,33 @@
+exclude: >
+  (?x)^(
+      deluge/ui/web/docs/template/.*|
+  )$
+repos:
+  - repo: https://github.com/ambv/black
+    rev: 18.9b0
+    hooks:
+      - id: black
+        name: Fmt Black
+        language_version: python3.6
+  - repo: https://github.com/prettier/prettier
+    rev: 1.15.2
+    hooks:
+      - id: prettier
+        name: Fmt Prettier
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v1.4.0
+    hooks:
+      - id: double-quote-string-fixer
+        name: Fix Double-quotes
+      - id: end-of-file-fixer
+        name: Fix End-of-files
+        exclude_types: [javascript, css]
+      - id: mixed-line-ending
+        name: Fix Line endings
+        args: [--fix=auto]
+      - id: trailing-whitespace
+        name: Fix Trailing whitespace
+      - id: flake8
+        name: Chk Flake8
+        additional_dependencies:
+          - flake8-isort==2.5

@@ -20,6 +20,7 @@ from twisted.web.resource import Resource
 from twisted.web.server import Site
 from twisted.web.util import redirectTo
 
+from deluge.common import windows_check
 from deluge.httpdownloader import download_file
 from deluge.log import setup_logger
 from deluge.ui.web.common import compress
@@ -32,24 +33,20 @@ def fname(name):
 
 
 class RedirectResource(Resource):
-
     def render(self, request):
         url = self.get_url().encode('utf8')
         return redirectTo(url, request)
 
 
 class RenameResource(Resource):
-
     def render(self, request):
-        filename = request.args.get('filename', ['renamed_file'])[0]
+        filename = request.args.get(b'filename', [b'renamed_file'])[0]
         request.setHeader(b'Content-Type', b'text/plain')
-        request.setHeader(b'Content-Disposition', b'attachment; filename=' +
-                          filename)
+        request.setHeader(b'Content-Disposition', b'attachment; filename=' + filename)
         return b'This file should be called ' + filename
 
 
 class AttachmentResource(Resource):
-
     def render(self, request):
         request.setHeader(b'Content-Type', b'text/plain')
         request.setHeader(b'Content-Disposition', b'attachment')
@@ -57,28 +54,25 @@ class AttachmentResource(Resource):
 
 
 class CookieResource(Resource):
-
     def render(self, request):
         request.setHeader(b'Content-Type', b'text/plain')
-        if request.getCookie('password') is None:
+        if request.getCookie(b'password') is None:
             return b'Password cookie not set!'
 
-        if request.getCookie('password') == 'deluge':
+        if request.getCookie(b'password') == b'deluge':
             return b'COOKIE MONSTER!'
 
         return request.getCookie('password')
 
 
 class GzipResource(Resource):
-
     def render(self, request):
-        message = request.args.get('msg', ['EFFICIENCY!'])[0]
+        message = request.args.get(b'msg', [b'EFFICIENCY!'])[0]
         request.setHeader(b'Content-Type', b'text/plain')
         return compress(message, request)
 
 
 class PartialDownloadResource(Resource):
-
     def __init__(self, *args, **kwargs):
         Resource.__init__(self)
         self.render_count = 0
@@ -102,16 +96,16 @@ class TopLevelResource(Resource):
 
     def __init__(self):
         Resource.__init__(self)
-        self.putChild('cookie', CookieResource())
-        self.putChild('gzip', GzipResource())
+        self.putChild(b'cookie', CookieResource())
+        self.putChild(b'gzip', GzipResource())
         self.redirect_rsrc = RedirectResource()
-        self.putChild('redirect', self.redirect_rsrc)
-        self.putChild('rename', RenameResource())
-        self.putChild('attachment', AttachmentResource())
-        self.putChild('partial', PartialDownloadResource())
+        self.putChild(b'redirect', self.redirect_rsrc)
+        self.putChild(b'rename', RenameResource())
+        self.putChild(b'attachment', AttachmentResource())
+        self.putChild(b'partial', PartialDownloadResource())
 
     def getChild(self, path, request):  # NOQA: N802
-        if path == '':
+        if not path:
             return self
         else:
             return Resource.getChild(self, path, request)
@@ -123,7 +117,6 @@ class TopLevelResource(Resource):
 
 
 class DownloadFileTestCase(unittest.TestCase):
-
     def get_url(self, path=''):
         return 'http://localhost:%d/%s' % (self.listen_port, path)
 
@@ -154,8 +147,8 @@ class DownloadFileTestCase(unittest.TestCase):
                 self.fail(ex)
         return filename
 
-    def assertNotContains(self, filename, contents):  # NOQA
-        with open(filename) as _file:
+    def assertNotContains(self, filename, contents, file_mode=''):  # NOQA
+        with open(filename, file_mode) as _file:
             try:
                 self.assertNotEqual(_file.read(), contents)
             except Exception as ex:
@@ -183,6 +176,10 @@ class DownloadFileTestCase(unittest.TestCase):
         return d
 
     def test_download_with_rename(self):
+
+        if windows_check():
+            raise unittest.SkipTest('on windows \\  != / for path names')
+
         url = self.get_url('rename?filename=renamed')
         d = download_file(url, fname('original'))
         d.addCallback(self.assertEqual, fname('renamed'))
@@ -190,6 +187,10 @@ class DownloadFileTestCase(unittest.TestCase):
         return d
 
     def test_download_with_rename_exists(self):
+
+        if windows_check():
+            raise unittest.SkipTest('on windows \\  != / for path names')
+
         open(fname('renamed'), 'w').close()
         url = self.get_url('rename?filename=renamed')
         d = download_file(url, fname('original'))
@@ -198,6 +199,10 @@ class DownloadFileTestCase(unittest.TestCase):
         return d
 
     def test_download_with_rename_sanitised(self):
+
+        if windows_check():
+            raise unittest.SkipTest('on windows \\  != / for path names')
+
         url = self.get_url('rename?filename=/etc/passwd')
         d = download_file(url, fname('original'))
         d.addCallback(self.assertEqual, fname('passwd'))
@@ -221,13 +226,17 @@ class DownloadFileTestCase(unittest.TestCase):
     def test_download_with_gzip_encoding(self):
         url = self.get_url('gzip?msg=success')
         d = download_file(url, fname('gzip_encoded'))
-        d.addCallback(self.assertContains, b'success')
+        d.addCallback(self.assertContains, 'success')
         return d
 
     def test_download_with_gzip_encoding_disabled(self):
         url = self.get_url('gzip?msg=fail')
         d = download_file(url, fname('gzip_encoded'), allow_compression=False)
-        d.addCallback(self.assertNotContains, b'fail')
+
+        def cb(result):
+            print(result)
+
+        d.addCallback(self.assertNotContains, b'fail', file_mode='rb')
         return d
 
     def test_page_redirect_unhandled(self):
@@ -237,6 +246,7 @@ class DownloadFileTestCase(unittest.TestCase):
 
         def on_redirect(failure):
             self.assertTrue(type(failure), PageRedirect)
+
         d.addErrback(on_redirect)
         return d
 

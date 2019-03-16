@@ -16,7 +16,11 @@ from deluge.ui.console.modes.torrentlist import torrentviewcolumns
 from deluge.ui.console.modes.torrentlist.torrentactions import torrent_actions_popup
 from deluge.ui.console.utils import curses_util as util
 from deluge.ui.console.utils import format_utils
-from deluge.ui.console.utils.column import get_column_value, get_required_fields, torrent_data_fields
+from deluge.ui.console.utils.column import (
+    get_column_value,
+    get_required_fields,
+    torrent_data_fields,
+)
 
 from . import ACTION
 
@@ -28,25 +32,14 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-state_fg_colors = {'Downloading': 'green',
-                   'Seeding': 'cyan',
-                   'Error': 'red',
-                   'Queued': 'yellow',
-                   'Checking': 'blue',
-                   'Moving': 'green'}
-
-
-def _queue_sort(v1, v2):
-    if v1 == v2:
-        return 0
-    if v2 < 0:
-        return -1
-    if v1 < 0:
-        return 1
-    if v1 > v2:
-        return 1
-    if v2 > v1:
-        return -1
+state_fg_colors = {
+    'Downloading': 'green',
+    'Seeding': 'cyan',
+    'Error': 'red',
+    'Queued': 'yellow',
+    'Checking': 'blue',
+    'Moving': 'green',
+}
 
 
 reverse_sort_fields = [
@@ -63,7 +56,7 @@ reverse_sort_fields = [
     'progress',
     'ratio',
     'seeding_time',
-    'active_time'
+    'active_time',
 ]
 
 
@@ -96,7 +89,6 @@ for col_i, col_name in enumerate(torrentviewcolumns.column_pref_names):
 
 
 class TorrentView(InputKeyHandler):
-
     def __init__(self, torrentlist, config):
         super(TorrentView, self).__init__()
         self.torrentlist = torrentlist
@@ -216,7 +208,7 @@ class TorrentView(InputKeyHandler):
         return False
 
     def _sort_torrents(self, state):
-        'sorts by primary and secondary sort fields'
+        """Sorts by primary and secondary sort fields."""
 
         if not state:
             return {}
@@ -237,6 +229,7 @@ class TorrentView(InputKeyHandler):
             # and if it's a string
             first_element = state[list(state)[0]]
             if field in first_element:
+
                 def sort_key(s):
                     try:
                         # Sort case-insensitively but preserve A>a order.
@@ -245,7 +238,7 @@ class TorrentView(InputKeyHandler):
                         # Not a string.
                         return state.get(s)[field]
 
-                to_sort = sorted(to_sort, _queue_sort, sort_key, reverse)
+                to_sort = sorted(to_sort, key=sort_key, reverse=reverse)
 
             if field == 'eta':
                 to_sort = sorted(to_sort, key=lambda s: state.get(s)['eta'] == 0)
@@ -261,7 +254,9 @@ class TorrentView(InputKeyHandler):
         result = sort_by_field(state, result, s_primary)
 
         if self.config['torrentview']['separate_complete']:
-            result = sorted(result, _queue_sort, lambda s: state.get(s).get('progress', 0) == 100.0)
+            result = sorted(
+                result, key=lambda s: state.get(s).get('progress', 0) == 100.0
+            )
 
         return result
 
@@ -289,7 +284,9 @@ class TorrentView(InputKeyHandler):
         if self.numtorrents == 0:
             cols = self.torrentlist.torrentview_columns()
             msg = 'No torrents match filter'.center(cols)
-            self.torrentlist.add_string(3, '{!info!}%s' % msg, scr=self.torrentlist.torrentview_panel)
+            self.torrentlist.add_string(
+                3, '{!info!}%s' % msg, scr=self.torrentlist.torrentview_panel
+            )
         elif self.numtorrents == 0:
             self.torrentlist.add_string(1, 'Waiting for torrents from core...')
             return
@@ -297,8 +294,13 @@ class TorrentView(InputKeyHandler):
         def draw_row(index):
             if index not in self.cached_rows:
                 ts = self.curstate[self.sorted_ids[index]]
-                self.cached_rows[index] = (format_utils.format_row(
-                    [get_column_value(name, ts) for name in self.cols_to_show], self.column_widths), ts['state'])
+                self.cached_rows[index] = (
+                    format_utils.format_row(
+                        [get_column_value(name, ts) for name in self.cols_to_show],
+                        self.column_widths,
+                    ),
+                    ts['state'],
+                )
             return self.cached_rows[index]
 
         tidx = self.curoff
@@ -327,12 +329,17 @@ class TorrentView(InputKeyHandler):
             else:
                 colorstr = '{!%(fg)s,%(bg)s!}' % colors
 
-            self.torrentlist.add_string(currow + self.torrentlist_offset, '%s%s' % (colorstr, row[0]),
-                                        trim=False, scr=self.torrentlist.torrentview_panel)
+            self.torrentlist.add_string(
+                currow + self.torrentlist_offset,
+                '%s%s' % (colorstr, row[0]),
+                trim=False,
+                scr=self.torrentlist.torrentview_panel,
+            )
 
     def update(self, refresh=False):
-        d = component.get('SessionProxy').get_torrents_status(self.filter_dict,
-                                                              self.status_fields)
+        d = component.get('SessionProxy').get_torrents_status(
+            self.filter_dict, self.status_fields
+        )
         d.addCallback(self.update_state, refresh=refresh)
 
     def on_config_changed(self):
@@ -341,13 +348,20 @@ class TorrentView(InputKeyHandler):
         changed = None
         for col in default_columns:
             if col not in self.config['torrentview']['columns']:
-                changed = self.config['torrentview']['columns'][col] = default_columns[col]
+                changed = self.config['torrentview']['columns'][col] = default_columns[
+                    col
+                ]
         if changed:
             self.config.save()
 
-        self.cols_to_show = [col for col in sorted(self.config['torrentview']['columns'],
-                                                   key=lambda k: self.config['torrentview']['columns'][k]['order'])
-                             if self.config['torrentview']['columns'][col]['visible']]
+        self.cols_to_show = [
+            col
+            for col in sorted(
+                self.config['torrentview']['columns'],
+                key=lambda k: self.config['torrentview']['columns'][k]['order'],
+            )
+            if self.config['torrentview']['columns'][col]['visible']
+        ]
         self.status_fields = get_required_fields(self.cols_to_show)
 
         # we always need these, even if we're not displaying them
@@ -364,8 +378,11 @@ class TorrentView(InputKeyHandler):
         self.update_columns()
 
     def update_columns(self):
-        self.column_widths = [self.config['torrentview']['columns'][col]['width'] for col in self.cols_to_show]
-        requested_width = sum([width for width in self.column_widths if width >= 0])
+        self.column_widths = [
+            self.config['torrentview']['columns'][col]['width']
+            for col in self.cols_to_show
+        ]
+        requested_width = sum(width for width in self.column_widths if width >= 0)
 
         cols = self.torrentlist.torrentview_columns()
         if requested_width > cols:  # can't satisfy requests, just spread out evenly
@@ -391,7 +408,7 @@ class TorrentView(InputKeyHandler):
 
             # Trim the column if it's too long to fit
             if len(ccol) > width:
-                ccol = ccol[:width - 1]
+                ccol = ccol[: width - 1]
 
             # Padding
             ccol += ' ' * (width - len(ccol))
@@ -428,8 +445,13 @@ class TorrentView(InputKeyHandler):
             def on_close(**kwargs):
                 if added:
                     self.marked.pop()
-            torrent_actions_popup(self.torrentlist, self._selected_torrent_ids(),
-                                  action=ACTION.REMOVE, close_cb=on_close)
+
+            torrent_actions_popup(
+                self.torrentlist,
+                self._selected_torrent_ids(),
+                action=ACTION.REMOVE,
+                close_cb=on_close,
+            )
         elif c in [curses.KEY_ENTER, util.KEY_ENTER2] and self.numtorrents:
             added = self.update_marked(self.cursel)
 
@@ -437,7 +459,12 @@ class TorrentView(InputKeyHandler):
                 if added:
                     self.marked.remove(self.cursel)
 
-            torrent_actions_popup(self.torrentlist, self._selected_torrent_ids(), details=True, close_cb=on_close)
+            torrent_actions_popup(
+                self.torrentlist,
+                self._selected_torrent_ids(),
+                details=True,
+                close_cb=on_close,
+            )
             self.torrentlist.refresh()
         elif c == ord('j'):
             affected_lines = self._scroll_up(1)
@@ -464,7 +491,11 @@ class TorrentView(InputKeyHandler):
                 added = self.update_marked(self.cursel, clear=True)
             else:
                 self.last_mark = -1
-            torrent_actions_popup(self.torrentlist, self._selected_torrent_ids(), action=ACTION.TORRENT_OPTIONS)
+            torrent_actions_popup(
+                self.torrentlist,
+                self._selected_torrent_ids(),
+                action=ACTION.TORRENT_OPTIONS,
+            )
         elif c in [ord('>'), ord('<')]:
             try:
                 i = self.cols_to_show.index(self.config['torrentview']['sort_primary'])

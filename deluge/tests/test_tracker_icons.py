@@ -8,9 +8,11 @@
 from __future__ import unicode_literals
 
 import pytest
+from twisted.trial.unittest import SkipTest
 
 import deluge.component as component
 import deluge.ui.tracker_icons
+from deluge.common import windows_check
 from deluge.ui.tracker_icons import TrackerIcon, TrackerIcons
 
 from . import common
@@ -24,7 +26,12 @@ common.disable_new_release_check()
 @pytest.mark.internet
 class TrackerIconsTestCase(BaseTestCase):
 
+    if windows_check():
+        skip = 'cannot use os.path.samefile to compair on windows(unix only)'
+
     def set_up(self):
+        # Disable resizing with Pillow for consistency.
+        self.patch(deluge.ui.tracker_icons, 'Image', None)
         self.icons = TrackerIcons()
 
     def tear_down(self):
@@ -51,6 +58,15 @@ class TrackerIconsTestCase(BaseTestCase):
         # google.com redirects to www.google.com
         icon = TrackerIcon(common.get_test_data_file('google.ico'))
         d = self.icons.fetch('google.com')
+        d.addCallback(self.assertNotIdentical, None)
+        d.addCallback(self.assertEqual, icon)
+        return d
+
+    def test_get_seo_ico_with_sni(self):
+        # seo using certificates with SNI support only
+        raise SkipTest('Site certificate expired')
+        icon = TrackerIcon(common.get_test_data_file('seo.ico'))
+        d = self.icons.fetch('www.seo.com')
         d.addCallback(self.assertNotIdentical, None)
         d.addCallback(self.assertEqual, icon)
         return d

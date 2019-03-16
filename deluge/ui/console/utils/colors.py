@@ -29,13 +29,11 @@ colors = [
     'COLOR_MAGENTA',
     'COLOR_RED',
     'COLOR_WHITE',
-    'COLOR_YELLOW'
+    'COLOR_YELLOW',
 ]
 
 # {(fg, bg): pair_number, ...}
-color_pairs = {
-    ('white', 'black'): 0  # Special case, can't be changed
-}
+color_pairs = {('white', 'black'): 0}  # Special case, can't be changed
 
 # Some default color schemes
 schemes = {
@@ -50,7 +48,7 @@ schemes = {
     'marked': ('white', 'blue', 'bold'),
     'selectedmarked': ('blue', 'white', 'bold'),
     'header': ('green', 'black', 'bold'),
-    'filterstatus': ('green', 'blue', 'bold')
+    'filterstatus': ('green', 'blue', 'bold'),
 }
 
 # Colors for various torrent states
@@ -61,7 +59,7 @@ state_color = {
     'Checking': '{!green,black!}',
     'Queued': '{!yellow,black!}',
     'Error': '{!red,black,bold!}',
-    'Moving': '{!green,black,bold!}'
+    'Moving': '{!green,black,bold!}',
 }
 
 type_color = {
@@ -70,8 +68,12 @@ type_color = {
     float: '{!green,black,bold!}',
     str: '{!cyan,black,bold!}',
     list: '{!magenta,black,bold!}',
-    dict: '{!white,black,bold!}'
+    dict: '{!white,black,bold!}',
 }
+
+tab_char = '\t'
+color_tag_start = '{!'
+color_tag_end = '!}'
 
 
 def get_color_pair(fg, bg):
@@ -90,14 +92,20 @@ def init_colors():
             color_pairs[(fg_name, bg_name)] = counter
             counter += 1
         except curses.error as ex:
-            log.warn('Error: %s', ex)
+            log.warning('Error: %s', ex)
         return counter
 
     # Create the color_pairs dict
     counter = 1
     for fg in colors:
         for bg in colors:
-            counter = define_pair(counter, fg[6:].lower(), bg[6:].lower(), getattr(curses, fg), getattr(curses, bg))
+            counter = define_pair(
+                counter,
+                fg[6:].lower(),
+                bg[6:].lower(),
+                getattr(curses, fg),
+                getattr(curses, bg),
+            )
 
     counter = define_pair(counter, 'white', 'grey', curses.COLOR_WHITE, 241)
     counter = define_pair(counter, 'black', 'whitegrey', curses.COLOR_BLACK, 249)
@@ -108,14 +116,20 @@ class BadColorString(Exception):
     pass
 
 
+def check_tag_count(string):
+    """Raise BadColorString if color tag open/close not equal."""
+    if string.count(color_tag_start) != string.count(color_tag_end):
+        raise BadColorString('Number of {! is not equal to number of !}')
+
+
 def replace_tabs(line):
     """
     Returns a string with tabs replaced with spaces.
 
     """
-    for i in range(line.count('\t')):
-        tab_length = 8 - (len(line[:line.find('\t')]) % 8)
-        line = line.replace('\t', ' ' * tab_length, 1)
+    for i in range(line.count(tab_char)):
+        tab_length = 8 - (len(line[: line.find(tab_char)]) % 8)
+        line = line.replace(tab_char, b' ' * tab_length, 1)
     return line
 
 
@@ -124,9 +138,13 @@ def strip_colors(line):
     Returns a string with the color formatting removed.
 
     """
+    check_tag_count(line)
+
     # Remove all the color tags
-    while line.find('{!') != -1:
-        line = line[:line.find('{!')] + line[line.find('!}') + 2:]
+    while line.find(color_tag_start) != -1:
+        tag_start = line.find(color_tag_start)
+        tag_end = line.find(color_tag_end) + 2
+        line = line[:tag_start] + line[tag_end:]
 
     return line
 
@@ -136,9 +154,6 @@ def get_line_length(line):
     Returns the string length without the color formatting.
 
     """
-    if line.count('{!') != line.count('!}'):
-        raise BadColorString('Number of {! is not equal to number of !}')
-
     # Remove all the color tags
     line = strip_colors(line)
 
@@ -152,9 +167,6 @@ def get_line_width(line):
     Get width of string considering double width characters
 
     """
-    if line.count('{!') != line.count('!}'):
-        raise BadColorString('Number of {! is not equal to number of !}')
-
     # Remove all the color tags
     line = strip_colors(line)
 
@@ -163,31 +175,35 @@ def get_line_width(line):
     return format_utils.strwidth(line)
 
 
-def parse_color_string(s, encoding='UTF-8'):
-    """
-    Parses a string and returns a list of 2-tuples (color, string).
+def parse_color_string(string):
+    """Parses a string and returns a list of 2-tuples (color, string).
 
-    :param s:, string to parse
-    :param encoding: the encoding to use on output
-
+    Args:
+        string (str): The string to parse.
     """
-    if s.count('{!') != s.count('!}'):
-        raise BadColorString('Number of {! is not equal to number of !}')
+    check_tag_count(string)
 
     ret = []
     last_color_attr = None
     # Keep track of where the strings
-    while s.find('{!') != -1:
-        begin = s.find('{!')
+    while string.find(color_tag_start) != -1:
+        begin = string.find(color_tag_start)
         if begin > 0:
-            ret.append((curses.color_pair(color_pairs[(schemes['input'][0], schemes['input'][1])]), s[:begin]))
+            ret.append(
+                (
+                    curses.color_pair(
+                        color_pairs[(schemes['input'][0], schemes['input'][1])]
+                    ),
+                    string[:begin],
+                )
+            )
 
-        end = s.find('!}')
+        end = string.find(color_tag_end)
         if end == -1:
             raise BadColorString('Missing closing "!}"')
 
         # Get a list of attributes in the bracketed section
-        attrs = s[begin + 2:end].split(',')
+        attrs = string[begin + 2 : end].split(',')
 
         if len(attrs) == 1 and not attrs[0].strip(' '):
             raise BadColorString('No description in {! !}')
@@ -223,7 +239,10 @@ def parse_color_string(s, encoding='UTF-8'):
             if attrs[0][0] in ['+', '-']:
                 # Color is not given, so use last color
                 if last_color_attr is None:
-                    raise BadColorString('No color value given when no previous color was used!: %s' % (attrs[0]))
+                    raise BadColorString(
+                        'No color value given when no previous color was used!: %s'
+                        % (attrs[0])
+                    )
                 color_pair = last_color_attr
                 for i, attr in enumerate(attrs):
                     if attr[1:] not in attrlist:
@@ -258,18 +277,18 @@ def parse_color_string(s, encoding='UTF-8'):
             last_color_attr = color_pair
         # We need to find the text now, so lets try to find another {! and if
         # there isn't one, then it's the rest of the string
-        next_begin = s.find('{!', end)
+        next_begin = string.find(color_tag_start, end)
 
         if next_begin == -1:
-            ret.append((color_pair, replace_tabs(s[end + 2:])))
+            ret.append((color_pair, replace_tabs(string[end + 2 :])))
             break
         else:
-            ret.append((color_pair, replace_tabs(s[end + 2:next_begin])))
-            s = s[next_begin:]
+            ret.append((color_pair, replace_tabs(string[end + 2 : next_begin])))
+            string = string[next_begin:]
 
     if not ret:
         # There was no color scheme so we add it with a 0 for white on black
-        ret = [(0, s)]
+        ret = [(0, string)]
     return ret
 
 
@@ -282,7 +301,6 @@ class ConsoleColorFormatter(object):
         '<torrent-id>': '{!green!}%s{!input!}',
         '<torrent>': '{!green!}%s{!input!}',
         '<command>': '{!green!}%s{!input!}',
-
         '<state>': '{!yellow!}%s{!input!}',
         '\\.\\.\\.': '{!yellow!}%s{!input!}',
         '\\s\\*\\s': '{!blue!}%s{!input!}',
@@ -290,20 +308,19 @@ class ConsoleColorFormatter(object):
         # "(\-[a-zA-Z0-9])": "{!red!}%s{!input!}",
         '--[_\\-a-zA-Z0-9]+': '{!green!}%s{!input!}',
         '(\\[|\\])': '{!info!}%s{!input!}',
-
         '<tab>': '{!white!}%s{!input!}',
         '[_A-Z]{3,}': '{!cyan!}%s{!input!}',
         '<key>': '{!cyan!}%s{!input!}',
         '<value>': '{!cyan!}%s{!input!}',
         'usage:': '{!info!}%s{!input!}',
         '<download-folder>': '{!yellow!}%s{!input!}',
-        '<torrent-file>': '{!green!}%s{!input!}'
-
+        '<torrent-file>': '{!green!}%s{!input!}',
     }
 
     def format_colors(self, string):
         def r(repl):
             return lambda s: repl % s.group()
+
         for key, replacement in self.replace_dict.items():
             string = re.sub(key, r(replacement), string)
         return string

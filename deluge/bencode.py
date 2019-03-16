@@ -11,6 +11,8 @@
 # Written by Petru Paler
 # Updated by Calum Lind to support both Python 2 and Python 3.
 
+from __future__ import unicode_literals
+
 from sys import version_info
 
 PY2 = version_info.major == 2
@@ -31,9 +33,9 @@ def decode_int(x, f):
     f += 1
     newf = x.index(END_DELIM, f)
     n = int(x[f:newf])
-    if x[f:f+1] == b'-' and x[f+1:f+2] == b'0':
+    if x[f : f + 1] == b'-' and x[f + 1 : f + 2] == b'0':
         raise ValueError
-    elif x[f:f+1] == b'0' and newf != f + 1:
+    elif x[f : f + 1] == b'0' and newf != f + 1:
         raise ValueError
     return (n, newf + 1)
 
@@ -41,25 +43,25 @@ def decode_int(x, f):
 def decode_string(x, f):
     colon = x.index(BYTE_SEP, f)
     n = int(x[f:colon])
-    if x[f:f+1] == b'0' and colon != f + 1:
+    if x[f : f + 1] == b'0' and colon != f + 1:
         raise ValueError
     colon += 1
-    return (x[colon:colon + n], colon + n)
+    return (x[colon : colon + n], colon + n)
 
 
 def decode_list(x, f):
     r, f = [], f + 1
-    while x[f:f+1] != END_DELIM:
-        v, f = decode_func[x[f:f+1]](x, f)
+    while x[f : f + 1] != END_DELIM:
+        v, f = decode_func[x[f : f + 1]](x, f)
         r.append(v)
     return (r, f + 1)
 
 
 def decode_dict(x, f):
     r, f = {}, f + 1
-    while x[f:f+1] != END_DELIM:
+    while x[f : f + 1] != END_DELIM:
         k, f = decode_string(x, f)
-        r[k], f = decode_func[x[f:f+1]](x, f)
+        r[k], f = decode_func[x[f : f + 1]](x, f)
     return (r, f + 1)
 
 
@@ -109,7 +111,7 @@ def encode_bool(x, r):
 
 
 def encode_string(x, r):
-    encode_string(x.encode('utf8'), r)
+    encode_bytes(x.encode('utf8'), r)
 
 
 def encode_bytes(x, r):
@@ -126,6 +128,10 @@ def encode_list(x, r):
 def encode_dict(x, r):
     r.append(DICT_DELIM)
     for k, v in sorted(x.items()):
+        try:
+            k = k.encode('utf8')
+        except AttributeError:
+            pass
         r.extend((str(len(k)).encode('utf8'), BYTE_SEP, k))
         encode_func[type(v)](v, r)
     r.append(END_DELIM)
@@ -141,9 +147,9 @@ encode_func[bool] = encode_bool
 encode_func[str] = encode_string
 encode_func[bytes] = encode_bytes
 if PY2:
-    encode_func[long] = encode_int
+    encode_func[long] = encode_int  # noqa: F821
     encode_func[str] = encode_bytes
-    encode_func[unicode] = encode_string
+    encode_func[unicode] = encode_string  # noqa: F821
 
 
 def bencode(x):

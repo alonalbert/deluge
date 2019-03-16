@@ -25,9 +25,7 @@ from deluge.plugins.pluginbase import CorePluginBase
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CONFIG = {
-    'commands': []
-}
+DEFAULT_CONFIG = {'commands': []}
 
 EXECUTE_ID = 0
 EXECUTE_EVENT = 1
@@ -36,7 +34,7 @@ EXECUTE_COMMAND = 2
 EVENT_MAP = {
     'complete': 'TorrentFinishedEvent',
     'added': 'TorrentAddedEvent',
-    'removed': 'TorrentRemovedEvent'
+    'removed': 'TorrentRemovedEvent',
 }
 
 
@@ -44,6 +42,7 @@ class ExecuteCommandAddedEvent(DelugeEvent):
     """
     Emitted when a new command is added.
     """
+
     def __init__(self, command_id, event, command):
         self._args = [command_id, event, command]
 
@@ -52,6 +51,7 @@ class ExecuteCommandRemovedEvent(DelugeEvent):
     """
     Emitted when a command is removed.
     """
+
     def __init__(self, command_id):
         self._args = [command_id]
 
@@ -72,11 +72,15 @@ class Core(CorePluginBase):
             def create_event_handler(event):
                 def event_handler(torrent_id, *arg):
                     self.execute_commands(torrent_id, event, *arg)
+
                 return event_handler
+
             event_handler = create_event_handler(event)
             event_manager.register_event_handler(EVENT_MAP[event], event_handler)
             if event == 'removed':
-                event_manager.register_event_handler('PreTorrentRemovedEvent', self.on_preremoved)
+                event_manager.register_event_handler(
+                    'PreTorrentRemovedEvent', self.on_preremoved
+                )
             self.registered_events[event] = event_handler
 
         log.debug('Execute core plugin enabled!')
@@ -85,14 +89,20 @@ class Core(CorePluginBase):
         # Get and store the torrent info before it is removed
         torrent = component.get('TorrentManager').torrents[torrent_id]
         info = torrent.get_status(['name', 'download_location'])
-        self.preremoved_cache[torrent_id] = [torrent_id, info['name'], info['download_location']]
+        self.preremoved_cache[torrent_id] = [
+            torrent_id,
+            info['name'],
+            info['download_location'],
+        ]
 
     def execute_commands(self, torrent_id, event, *arg):
         if event == 'added' and arg[0]:
             # No futher action as from_state (arg[0]) is True
             return
         elif event == 'removed':
-            torrent_id, torrent_name, download_location = self.preremoved_cache.pop(torrent_id)
+            torrent_id, torrent_name, download_location = self.preremoved_cache.pop(
+                torrent_id
+            )
         else:
             torrent = component.get('TorrentManager').torrents[torrent_id]
             info = torrent.get_status(['name', 'download_location'])
@@ -106,11 +116,11 @@ class Core(CorePluginBase):
         def log_error(result, command):
             (stdout, stderr, exit_code) = result
             if exit_code:
-                log.warn('Command "%s" failed with exit code %d', command, exit_code)
+                log.warning('Command "%s" failed with exit code %d', command, exit_code)
                 if stdout:
-                    log.warn('stdout: %s', stdout)
+                    log.warning('stdout: %s', stdout)
                 if stderr:
-                    log.warn('stderr: %s', stderr)
+                    log.warning('stderr: %s', stderr)
 
         # Go through and execute all the commands
         for command in self.config['commands']:
@@ -118,8 +128,11 @@ class Core(CorePluginBase):
                 command = os.path.expandvars(command[EXECUTE_COMMAND])
                 command = os.path.expanduser(command)
 
-                cmd_args = [torrent_id.encode('utf8'), torrent_name.encode('utf8'),
-                            download_location.encode('utf8')]
+                cmd_args = [
+                    torrent_id.encode('utf8'),
+                    torrent_name.encode('utf8'),
+                    download_location.encode('utf8'),
+                ]
                 if windows_check():
                     # Escape ampersand on windows (see #2784)
                     cmd_args = [cmd_arg.replace('&', '^^^&') for cmd_arg in cmd_args]
@@ -141,10 +154,12 @@ class Core(CorePluginBase):
     # Exported RPC methods #
     @export
     def add_command(self, event, command):
-        command_id = hashlib.sha1(str(time.time())).hexdigest()
+        command_id = hashlib.sha1(str(time.time()).encode()).hexdigest()
         self.config['commands'].append((command_id, event, command))
         self.config.save()
-        component.get('EventManager').emit(ExecuteCommandAddedEvent(command_id, event, command))
+        component.get('EventManager').emit(
+            ExecuteCommandAddedEvent(command_id, event, command)
+        )
 
     @export
     def get_commands(self):
@@ -155,7 +170,9 @@ class Core(CorePluginBase):
         for command in self.config['commands']:
             if command[EXECUTE_ID] == command_id:
                 self.config['commands'].remove(command)
-                component.get('EventManager').emit(ExecuteCommandRemovedEvent(command_id))
+                component.get('EventManager').emit(
+                    ExecuteCommandRemovedEvent(command_id)
+                )
                 break
         self.config.save()
 

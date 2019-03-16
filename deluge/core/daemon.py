@@ -65,40 +65,59 @@ def is_daemon_running(pid_file):
 class Daemon(object):
     """The Deluge Daemon class"""
 
-    def __init__(self, listen_interface=None, interface=None, port=None, standalone=False,
-                 read_only_config_keys=None):
+    def __init__(
+        self,
+        listen_interface=None,
+        outgoing_interface=None,
+        interface=None,
+        port=None,
+        standalone=False,
+        read_only_config_keys=None,
+    ):
         """
         Args:
-            listen_interface (str, optional): The IP address to listen to bittorrent connections on.
-            interface (str, optional): The IP address the daemon will listen for UI connections on.
-            port (int, optional): The port the daemon will listen for UI connections on.
-            standalone (bool, optional): If True the client is in Standalone mode otherwise, if
-                False, start the daemon as separate process.
-            read_only_config_keys (list of str, optional): A list of config keys that will not be
-                altered by core.set_config() RPC method.
+            listen_interface (str, optional): The IP address to listen to
+                BitTorrent connections on.
+            outgoing_interface (str, optional): The network interface name or
+                IP address to open outgoing BitTorrent connections on.
+            interface (str, optional): The IP address the daemon will
+                listen for UI connections on.
+            port (int, optional): The port the daemon will listen for UI
+                connections on.
+            standalone (bool, optional): If True the client is in Standalone
+                mode otherwise, if False, start the daemon as separate process.
+            read_only_config_keys (list of str, optional): A list of config
+                keys that will not be altered by core.set_config() RPC method.
         """
         self.standalone = standalone
         self.pid_file = get_config_dir('deluged.pid')
         log.info('Deluge daemon %s', get_version())
         if is_daemon_running(self.pid_file):
-            raise DaemonRunningError('Deluge daemon already running with this config directory!')
+            raise DaemonRunningError(
+                'Deluge daemon already running with this config directory!'
+            )
 
         # Twisted catches signals to terminate, so just have it call the shutdown method.
         reactor.addSystemEventTrigger('before', 'shutdown', self._shutdown)
 
         # Catch some Windows specific signals
         if windows_check():
+
             def win_handler(ctrl_type):
                 """Handle the Windows shutdown or close events."""
                 log.debug('windows handler ctrl_type: %s', ctrl_type)
                 if ctrl_type == CTRL_CLOSE_EVENT or ctrl_type == CTRL_SHUTDOWN_EVENT:
                     self._shutdown()
                     return 1
+
             SetConsoleCtrlHandler(win_handler)
 
         # Start the core as a thread and join it until it's done
-        self.core = Core(listen_interface=listen_interface,
-                         read_only_config_keys=read_only_config_keys)
+        self.core = Core(
+            listen_interface=listen_interface,
+            outgoing_interface=outgoing_interface,
+            read_only_config_keys=read_only_config_keys,
+        )
 
         if port is None:
             port = self.core.config['daemon_port']
@@ -112,10 +131,16 @@ class Daemon(object):
             port=port,
             allow_remote=self.core.config['allow_remote'],
             listen=not standalone,
-            interface=interface
+            interface=interface,
         )
 
-        log.debug('Listening to UI on: %s:%s and bittorrent on: %s', interface, port, listen_interface)
+        log.debug(
+            'Listening to UI on: %s:%s and bittorrent on: %s Making connections out on: %s',
+            interface,
+            port,
+            listen_interface,
+            outgoing_interface,
+        )
 
     def start(self):
         # Register the daemon and the core RPCs
@@ -157,6 +182,11 @@ class Daemon(object):
         """Returns a list of the exported methods."""
         return self.rpcserver.get_method_list()
 
+    @export()
+    def get_version(self):
+        """Returns the daemon version"""
+        return get_version()
+
     @export(1)
     def authorized_call(self, rpc):
         """Determines if session auth_level is authorized to call RPC.
@@ -170,4 +200,6 @@ class Daemon(object):
         if rpc not in self.get_method_list():
             return False
 
-        return self.rpcserver.get_session_auth_level() >= self.rpcserver.get_rpc_auth_level(rpc)
+        return self.rpcserver.get_session_auth_level() >= self.rpcserver.get_rpc_auth_level(
+            rpc
+        )

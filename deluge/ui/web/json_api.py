@@ -9,13 +9,14 @@
 
 from __future__ import division, unicode_literals
 
-import base64
 import json
 import logging
 import os
 import shutil
 import tempfile
+from base64 import b64encode
 from types import FunctionType
+from xml.sax.saxutils import escape as xml_escape
 
 from twisted.internet import defer, reactor
 from twisted.internet.defer import Deferred, DeferredList
@@ -54,6 +55,7 @@ def export(auth_level=AUTH_LEVEL_DEFAULT):
     :type auth_level: int
 
     """
+
     def wrap(func, *args, **kwargs):
         func._json_export = True
         func._json_auth_level = auth_level
@@ -94,9 +96,11 @@ class JSON(resource.Resource, component.Component):
         Returns:
             t.i.d.Deferred: A deferred returning the available remote methods
         """
+
         def on_get_methods(methods):
             self._remote_methods = methods
             return methods
+
         return client.daemon.get_method_list().addCallback(on_get_methods)
 
     def _exec_local(self, method, params, request):
@@ -133,16 +137,19 @@ class JSON(resource.Resource, component.Component):
         procedure calls and the request id.
         """
         try:
-            request.json = json.loads(request.json)
+            request_data = json.loads(request.json.decode())
         except (ValueError, TypeError):
             raise JSONException('JSON not decodable')
 
         try:
-            method = request.json['method']
-            params = request.json['params']
-            request_id = request.json['id']
+            method = request_data['method']
+            params = request_data['params']
+            request_id = request_data['id']
         except KeyError as ex:
-            message = 'Invalid JSON request, missing param %s in %s' % (ex, request.json)
+            message = 'Invalid JSON request, missing param %s in %s' % (
+                ex,
+                request_data,
+            )
             raise JSONException(message)
 
         result = None
@@ -176,7 +183,10 @@ class JSON(resource.Resource, component.Component):
         Handles any failures that occurred while making an rpc call.
         """
         log.error(reason)
-        response['error'] = {'message': '%s: %s' % (reason.__class__.__name__, str(reason)), 'code': 4}
+        response['error'] = {
+            'message': '%s: %s' % (reason.__class__.__name__, str(reason)),
+            'code': 4,
+        }
         return self._send_response(request, response)
 
     def _on_json_request(self, request):
@@ -184,8 +194,9 @@ class JSON(resource.Resource, component.Component):
         Handler to take the json data as a string and pass it on to the
         _handle_request method for further processing.
         """
-        if request.getHeader('content-type') != 'application/json':
-            message = 'Invalid JSON request content-type: %s' % request.getHeader('content-type')
+        content_type = request.getHeader(b'content-type').decode()
+        if content_type != 'application/json':
+            message = 'Invalid JSON request content-type: %s' % content_type
             raise JSONException(message)
 
         log.debug('json-request: %s', request.json)
@@ -205,17 +216,22 @@ class JSON(resource.Resource, component.Component):
         Returns the error in json response.
         """
         log.error(reason)
-        response = {'result': None, 'id': None,
-                    'error': {'code': 5,
-                              'message': '%s: %s' % (reason.__class__.__name__, str(reason))}}
+        response = {
+            'result': None,
+            'id': None,
+            'error': {
+                'code': 5,
+                'message': '%s: %s' % (reason.__class__.__name__, str(reason)),
+            },
+        }
         return self._send_response(request, response)
 
     def _send_response(self, request, response):
         if request._disconnected:
             return ''
         response = json.dumps(response)
-        request.setHeader(b'content-type', b'application/x-json')
-        request.write(compress(response, request))
+        request.setHeader(b'content-type', b'application/json')
+        request.write(compress(response.encode(), request))
         request.finish()
         return server.NOT_DONE_YET
 
@@ -223,7 +239,7 @@ class JSON(resource.Resource, component.Component):
         """
         Handles all the POST requests made to the /json controller.
         """
-        if request.method != 'POST':
+        if request.method != b'POST':
             request.setResponseCode(http.NOT_ALLOWED)
             request.finish()
             return server.NOT_DONE_YET
@@ -350,6 +366,8 @@ class WebApi(JSONComponent):
     methods available from the core RPC.
     """
 
+    XSS_VULN_KEYS = ['name', 'message', 'comment', 'tracker_status', 'peers']
+
     def __init__(self):
         super(WebApi, self).__init__('Web', depend=['SessionProxy'])
         self.hostlist = HostList()
@@ -361,8 +379,12 @@ class WebApi(JSONComponent):
             self.sessionproxy = SessionProxy()
 
     def disable(self):
-        client.deregister_event_handler('PluginEnabledEvent', self._json.get_remote_methods)
-        client.deregister_event_handler('PluginDisabledEvent', self._json.get_remote_methods)
+        client.deregister_event_handler(
+            'PluginEnabledEvent', self._json.get_remote_methods
+        )
+        client.deregister_event_handler(
+            'PluginDisabledEvent', self._json.get_remote_methods
+        )
 
         if client.is_standalone():
             component.get('Web.PluginManager').stop()
@@ -371,8 +393,12 @@ class WebApi(JSONComponent):
             client.set_disconnect_callback(None)
 
     def enable(self):
-        client.register_event_handler('PluginEnabledEvent', self._json.get_remote_methods)
-        client.register_event_handler('PluginDisabledEvent', self._json.get_remote_methods)
+        client.register_event_handler(
+            'PluginEnabledEvent', self._json.get_remote_methods
+        )
+        client.register_event_handler(
+            'PluginDisabledEvent', self._json.get_remote_methods
+        )
 
         if client.is_standalone():
             component.get('Web.PluginManager').start()
@@ -394,6 +420,11 @@ class WebApi(JSONComponent):
         component.get('Web.PluginManager').start()
         self.start()
         return d_methods
+
+    def _on_client_connect_fail(self, result, host_id):
+        log.error(
+            'Unable to connect to daemon, check host_id "%s" is correct.', host_id
+        )
 
     def _on_client_disconnect(self, *args):
         component.get('Web.PluginManager').stop()
@@ -418,7 +449,10 @@ class WebApi(JSONComponent):
         Returns:
             Deferred: List of methods the daemon supports.
         """
-        return self.hostlist.connect_host(host_id).addCallback(self._on_client_connect)
+        d = self.hostlist.connect_host(host_id)
+        d.addCallback(self._on_client_connect)
+        d.addErrback(self._on_client_connect_fail, host_id)
+        return d
 
     @export
     def connected(self):
@@ -439,6 +473,7 @@ class WebApi(JSONComponent):
 
         def on_disconnect(reason):
             return str(reason)
+
         d.addCallback(on_disconnect)
         return d
 
@@ -462,8 +497,8 @@ class WebApi(JSONComponent):
             'stats': {
                 'max_download': self.core_config.get('max_download_speed'),
                 'max_upload': self.core_config.get('max_upload_speed'),
-                'max_num_connections': self.core_config.get('max_connections_global')
-            }
+                'max_num_connections': self.core_config.get('max_connections_global'),
+            },
         }
 
         if not client.connected():
@@ -474,10 +509,16 @@ class WebApi(JSONComponent):
             ui_info['stats']['num_connections'] = stats['num_peers']
             ui_info['stats']['upload_rate'] = stats['payload_upload_rate']
             ui_info['stats']['download_rate'] = stats['payload_download_rate']
-            ui_info['stats']['download_protocol_rate'] = stats['download_rate'] - stats['payload_download_rate']
-            ui_info['stats']['upload_protocol_rate'] = stats['upload_rate'] - stats['payload_upload_rate']
+            ui_info['stats']['download_protocol_rate'] = (
+                stats['download_rate'] - stats['payload_download_rate']
+            )
+            ui_info['stats']['upload_protocol_rate'] = (
+                stats['upload_rate'] - stats['payload_upload_rate']
+            )
             ui_info['stats']['dht_nodes'] = stats['dht_nodes']
-            ui_info['stats']['has_incoming_connections'] = stats['has_incoming_connections']
+            ui_info['stats']['has_incoming_connections'] = stats[
+                'has_incoming_connections'
+            ]
 
         def got_filters(filters):
             ui_info['filters'] = filters
@@ -500,15 +541,17 @@ class WebApi(JSONComponent):
         d2 = client.core.get_filter_tree()
         d2.addCallback(got_filters)
 
-        d3 = client.core.get_session_status([
-            'num_peers',
-            'payload_download_rate',
-            'payload_upload_rate',
-            'download_rate',
-            'upload_rate',
-            'dht_nodes',
-            'has_incoming_connections'
-        ])
+        d3 = client.core.get_session_status(
+            [
+                'num_peers',
+                'payload_download_rate',
+                'payload_upload_rate',
+                'download_rate',
+                'upload_rate',
+                'dht_nodes',
+                'has_incoming_connections',
+            ]
+        )
         d3.addCallback(got_stats)
 
         d4 = client.core.get_free_space(self.core_config.get('download_location'))
@@ -529,7 +572,7 @@ class WebApi(JSONComponent):
         paths = []
         info = {}
         for index, torrent_file in enumerate(files):
-            path = torrent_file['path']
+            path = xml_escape(torrent_file['path'])
             paths.append(path)
             torrent_file['progress'] = file_progress[index]
             torrent_file['priority'] = file_priorities[index]
@@ -566,9 +609,25 @@ class WebApi(JSONComponent):
         file_tree.walk(walk)
         d.callback(file_tree.get_tree())
 
+    def _on_torrent_status(self, torrent, d):
+        for key in self.XSS_VULN_KEYS:
+            try:
+                if key == 'peers':
+                    for peer in torrent[key]:
+                        peer['client'] = xml_escape(peer['client'])
+                else:
+                    torrent[key] = xml_escape(torrent[key])
+            except KeyError:
+                pass
+        d.callback(torrent)
+
     @export
     def get_torrent_status(self, torrent_id, keys):
-        return component.get('SessionProxy').get_torrent_status(torrent_id, keys)
+        """Get the status for a torrent, filtered by status keys."""
+        main_deferred = Deferred()
+        d = component.get('SessionProxy').get_torrent_status(torrent_id, keys)
+        d.addCallback(self._on_torrent_status, main_deferred)
+        return main_deferred
 
     @export
     def get_torrent_files(self, torrent_id):
@@ -644,6 +703,7 @@ class WebApi(JSONComponent):
 
     @export
     def get_magnet_info(self, uri):
+        """Parse a magnet URI for hash and name."""
         return get_magnet_info(uri)
 
     @export
@@ -667,17 +727,25 @@ class WebApi(JSONComponent):
 
         for torrent in torrents:
             if is_magnet(torrent['path']):
-                log.info('Adding torrent from magnet uri `%s` with options `%r`',
-                         torrent['path'], torrent['options'])
+                log.info(
+                    'Adding torrent from magnet uri `%s` with options `%r`',
+                    torrent['path'],
+                    torrent['options'],
+                )
                 d = client.core.add_torrent_magnet(torrent['path'], torrent['options'])
                 deferreds.append(d)
             else:
                 filename = os.path.basename(torrent['path'])
                 with open(torrent['path'], 'rb') as _file:
-                    fdump = base64.encodestring(_file.read())
-                log.info('Adding torrent from file `%s` with options `%r`',
-                         filename, torrent['options'])
-                d = client.core.add_torrent_file_async(filename, fdump, torrent['options'])
+                    fdump = b64encode(_file.read())
+                log.info(
+                    'Adding torrent from file `%s` with options `%r`',
+                    filename,
+                    torrent['options'],
+                )
+                d = client.core.add_torrent_file_async(
+                    filename, fdump, torrent['options']
+                )
                 deferreds.append(d)
         return DeferredList(deferreds, consumeErrors=False)
 
@@ -710,6 +778,7 @@ class WebApi(JSONComponent):
         :type host_id: string
 
         """
+
         def response(result):
             return result
 
@@ -788,12 +857,13 @@ class WebApi(JSONComponent):
             return main_deferred
 
         try:
+
             def on_connect(connected, c):
                 if not connected:
                     main_deferred.callback((False, _('Daemon not running')))
                     return
                 c.daemon.shutdown()
-                main_deferred.callback((True, ))
+                main_deferred.callback((True,))
 
             def on_connect_failed(reason):
                 main_deferred.callback((False, reason))
@@ -832,7 +902,7 @@ class WebApi(JSONComponent):
         web_config = component.get('DelugeWeb').config
         for key in config:
             if key in ['sessions', 'pwd_salt', 'pwd_sha1']:
-                log.warn('Ignored attempt to overwrite web config key: %s', key)
+                log.warning('Ignored attempt to overwrite web config key: %s', key)
                 continue
             web_config[key] = config[key]
 
@@ -850,19 +920,22 @@ class WebApi(JSONComponent):
 
         return {
             'enabled_plugins': list(component.get('Web.PluginManager').plugins),
-            'available_plugins': component.get('Web.PluginManager').available_plugins
+            'available_plugins': component.get('Web.PluginManager').available_plugins,
         }
 
     @export
     def get_plugin_info(self, name):
+        """Get the details for a plugin."""
         return component.get('Web.PluginManager').get_plugin_info(name)
 
     @export
     def get_plugin_resources(self, name):
+        """Get the resource data files for a plugin."""
         return component.get('Web.PluginManager').get_plugin_resources(name)
 
     @export
     def upload_plugin(self, filename, path):
+        """Upload a plugin to config."""
         main_deferred = Deferred()
 
         shutil.copyfile(path, os.path.join(get_config_dir(), 'plugins', filename))
@@ -872,7 +945,7 @@ class WebApi(JSONComponent):
             client.core.rescan_plugins()
             return True
         with open(path, 'rb') as _file:
-            plugin_data = base64.encodestring(_file.read())
+            plugin_data = b64encode(_file.read())
 
         def on_upload_complete(*args):
             client.core.rescan_plugins()
@@ -919,6 +992,7 @@ class WebUtils(JSONComponent):
     """
     Utility functions for the webui that do not fit in the WebApi.
     """
+
     def __init__(self):
         super(WebUtils, self).__init__('WebUtils')
 
